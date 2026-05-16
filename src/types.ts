@@ -1,28 +1,19 @@
 // ── Core types ────────────────────────────────────────────────────────────────
 
+const CENTRY_HOST = 'https://centry.pages.dev'
+
 export interface CentryConfig {
-  dsn: string
+  project: string
   environment?: string
   release?: string
   allowUrls?: RegExp[]
   enabled?: boolean
+  /** Max errors sent per 60-second window. Defaults to 10. */
+  maxEventsPerMinute?: number
+  /** How long (ms) to suppress duplicate errors. Defaults to 10000 (10s). */
+  dedupWindowMs?: number
 }
 
-export interface ParsedDsn {
-  publicKey: string
-  host: string
-  projectId: string
-  envelopeUrl: string
-}
-
-export function parseDsn(dsn: string): ParsedDsn {
-  // Format: https://PUBLIC_KEY@host/PROJECT_ID
-  const url = new URL(dsn)
-  const publicKey = url.username
-  const host = url.origin.replace(`//${publicKey}@`, '//')
-  // Reconstruct origin without credentials
-  const cleanOrigin = `${url.protocol}//${url.host}`
-  const projectId = url.pathname.slice(1) // strip leading /
-  const envelopeUrl = `${cleanOrigin}/api/${projectId}/envelope/`
-  return { publicKey, host: cleanOrigin, projectId, envelopeUrl }
+export function envelopeUrl(project: string): string {
+  return `${CENTRY_HOST}/api/${project}/envelope/`
 }

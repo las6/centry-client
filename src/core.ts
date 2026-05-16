@@ -1,12 +1,12 @@
 import { parseStack } from './stackParser'
-import type { CentryConfig, ParsedDsn } from './types'
-import { parseDsn } from './types'
+import type { CentryConfig } from './types'
+import { envelopeUrl } from './types'
 
 // ── Envelope builder ──────────────────────────────────────────────────────────
 
-function buildEnvelope(event: Record<string, unknown>, dsn: ParsedDsn): string {
+function buildEnvelope(event: Record<string, unknown>, projectId: string): string {
   const eventJson = JSON.stringify(event)
-  const header = JSON.stringify({ dsn: `${dsn.host}/api/${dsn.projectId}/`, sent_at: new Date().toISOString() })
+  const header = JSON.stringify({ sent_at: new Date().toISOString() })
   const itemHeader = JSON.stringify({ type: 'event', length: eventJson.length })
   return `${header}\n${itemHeader}\n${eventJson}\n`
 }
@@ -58,18 +58,10 @@ function parseUa(): { browser: { name: string; version: string }; os: { name: st
 
 // ── Source context fetcher ────────────────────────────────────────────────────
 
-// Cache fetched source files for the lifetime of the page — avoids re-fetching
-// the same large bundle multiple times if several errors occur.
 const sourceCache = new Map<string, string[] | null>()
 
-/**
- * Fetch a JS source file and return its lines, or null on any failure.
- * Uses a 2-second timeout so it can never meaningfully delay error capture.
- * Only fetches same-origin or CORS-accessible URLs; silently drops the rest.
- */
 async function fetchSourceLines(url: string): Promise<string[] | null> {
   if (sourceCache.has(url)) return sourceCache.get(url)!
-
   try {
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), 2000)
@@ -102,55 +94,76 @@ interface FrameWithContext extends FrameRaw {
   post_context?: string[]
 }
 
-/**
- * Enrich stack frames with source context lines by fetching each unique
- * source file. All fetches run in parallel. Failures are silently ignored —
- * frames without context are still included in the event.
- */
 async function enrichFrames(frames: FrameRaw[]): Promise<FrameWithContext[]> {
-  // Collect unique filenames that look like fetchable URLs
   const urls = [...new Set(
-    frames
-      .map((f) => f.filename)
-      .filter((fn) => fn && /^https?:\/\//.test(fn))
+    frames.map((f) => f.filename).filter((fn) => fn && /^https?:\/\//.test(fn))
   )]
-
-  // Fetch all files in parallel
   const sourceMap = new Map<string, string[] | null>()
-  await Promise.all(
-    urls.map(async (url) => {
-      sourceMap.set(url, await fetchSourceLines(url))
-    })
-  )
-
+  await Promise.all(urls.map(async (url) => { sourceMap.set(url, await fetchSourceLines(url)) }))
   return frames.map((f): FrameWithContext => {
     const lines = sourceMap.get(f.filename) ?? null
     if (!lines || !f.lineno) return f
-
-    const idx = f.lineno - 1 // 0-indexed
-    const pre = lines.slice(Math.max(0, idx - CONTEXT_LINES), idx)
-    const context = lines[idx]
-    const post = lines.slice(idx + 1, idx + 1 + CONTEXT_LINES)
-
+    const idx = f.lineno - 1
     return {
       ...f,
-      pre_context: pre,
-      context_line: context,
-      post_context: post,
+      pre_context: lines.slice(Math.max(0, idx - CONTEXT_LINES), idx),
+      context_line: lines[idx],
+      post_context: lines.slice(idx + 1, idx + 1 + CONTEXT_LINES),
     }
   })
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function toError(value: unknown): Error | null {
+  if (value instanceof Error) return value
+  if (value === null || value === undefined) return null
+  const msg = typeof value === 'string'
+    ? value
+    : typeof value === 'object'
+      ? String((value as Record<string, unknown>).message || JSON.stringify(value))
+      : String(value)
+  const err = new Error(msg)
+  err.name = typeof value === 'object' && (value as Record<string, unknown>).name
+    ? String((value as Record<string, unknown>).name)
+    : 'UnknownError'
+  return err
+}
+
+// ── Rate limiter ──────────────────────────────────────────────────────────────
+// Sliding window: tracks timestamps of recent sends and drops if over the cap.
+
+class RateLimiter {
+  private readonly max: number
+  private readonly windowMs: number
+  private timestamps: number[] = []
+
+  constructor(max: number, windowMs: number) {
+    this.max = max
+    this.windowMs = windowMs
+  }
+
+  allow(): boolean {
+    const now = Date.now()
+    this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs)
+    if (this.timestamps.length >= this.max) return false
+    this.timestamps.push(now)
+    return true
+  }
 }
 
 // ── Core client ───────────────────────────────────────────────────────────────
 
 export class CentryClient {
   private config: CentryConfig
-  private dsn: ParsedDsn
+  private url: string
   private recentErrors = new Set<string>()
+  private rateLimiter: RateLimiter
 
   constructor(config: CentryConfig) {
     this.config = config
-    this.dsn = parseDsn(config.dsn)
+    this.url = envelopeUrl(config.project)
+    this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 60_000)
   }
 
   /** Capture a manually-caught exception (handled = true). */
@@ -168,30 +181,30 @@ export class CentryClient {
       if (this.config.enabled === false) return
       if (typeof window === 'undefined') return
 
-      // Normalise non-Error values to an Error so we always have a stack
       const err = toError(error)
       if (!err) return
 
-      // Filter cross-origin noise — browsers mask these as "Script error."
+      // Filter cross-origin noise
       if (err.message === 'Script error.' || err.message === 'Script error') return
 
-      // Client-side dedup — skip if we sent this fingerprint in the last 3 s
-      const dedupKey = `${err.message}:${err.stack?.slice(0, 120) ?? ''}`
+      // Client-side dedup — same error fingerprint within dedupWindowMs (default 10s)
+      const dedupKey = `${err.name}:${err.message}:${err.stack?.slice(0, 150) ?? ''}`
       if (this.recentErrors.has(dedupKey)) return
       this.recentErrors.add(dedupKey)
-      setTimeout(() => this.recentErrors.delete(dedupKey), 3000)
+      const dedupWindow = this.config.dedupWindowMs ?? 10_000
+      setTimeout(() => this.recentErrors.delete(dedupKey), dedupWindow)
+
+      // Rate limit — hard cap per minute, protects against runaway loops
+      if (!this.rateLimiter.allow()) return
 
       const frames = err.stack ? parseStack(err.stack) : []
       const allowUrls = this.config.allowUrls
-
       const rawFrames: FrameRaw[] = frames.map((f) => ({
         ...f,
         in_app: !allowUrls || allowUrls.some((re) => re.test(f.filename)),
       }))
 
-      // Enrich with source context (parallel fetches, 2 s max)
       const enrichedFrames = await enrichFrames(rawFrames)
-
       const { browser, os } = parseUa()
 
       const event: Record<string, unknown> = {
@@ -202,14 +215,12 @@ export class CentryClient {
         release: this.config.release,
         breadcrumbs: { values: [] },
         exception: {
-          values: [
-            {
-              type: err.name || 'Error',
-              value: err.message,
-              mechanism: { type: handled ? 'generic' : 'onerror', handled },
-              stacktrace: { frames: enrichedFrames },
-            },
-          ],
+          values: [{
+            type: err.name || 'Error',
+            value: err.message,
+            mechanism: { type: handled ? 'generic' : 'onerror', handled },
+            stacktrace: { frames: enrichedFrames },
+          }],
         },
         contexts: {
           browser,
@@ -225,26 +236,22 @@ export class CentryClient {
 
       this.send(event)
     } catch {
-      // Capturing must never throw — swallow everything
+      // Capturing must never throw
     }
   }
 
   private send(event: Record<string, unknown>): void {
     try {
-      const envelope = buildEnvelope(event, this.dsn)
-      const authHeader = `Sentry sentry_version=7, sentry_key=${this.dsn.publicKey}`
+      const envelope = buildEnvelope(event, this.config.project)
       const blob = new Blob([envelope], { type: 'text/plain' })
 
       if (navigator.sendBeacon) {
-        navigator.sendBeacon(this.dsn.envelopeUrl, blob)
+        navigator.sendBeacon(this.url, blob)
       } else {
-        fetch(this.dsn.envelopeUrl, {
+        fetch(this.url, {
           method: 'POST',
           body: envelope,
-          headers: {
-            'Content-Type': 'text/plain',
-            'X-Sentry-Auth': authHeader,
-          },
+          headers: { 'Content-Type': 'text/plain' },
           keepalive: true,
         }).catch(() => {/* silent */})
       }
@@ -254,28 +261,41 @@ export class CentryClient {
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Module-level singleton ────────────────────────────────────────────────────
+// Mirrors Sentry's API: call init() once at app startup (in your client entry
+// file), then use captureException() anywhere without importing the client.
+
+let _client: CentryClient | null = null
 
 /**
- * Coerce any thrown value into an Error with a stack trace.
- * Returns null only for values that should be completely ignored.
+ * Initialize Centry. Call once at application startup, before React mounts.
+ * Subsequent calls replace the active client (useful for hot-reload in dev).
+ *
+ * @example
+ * // client.tsx / main.tsx
+ * import { init } from 'centry-client'
+ * init({ project: 'my-project' })
  */
-function toError(value: unknown): Error | null {
-  if (value instanceof Error) return value
+export function init(config: CentryConfig): CentryClient {
+  _client = new CentryClient(config)
+  return _client
+}
 
-  // Ignore completely empty/nullish throws
-  if (value === null || value === undefined) return null
+/**
+ * Capture an exception. No-op if init() has not been called.
+ *
+ * @example
+ * import { captureException } from 'centry-client'
+ * captureException(error)
+ */
+export function captureException(error: unknown): void {
+  _client?.captureException(error)
+}
 
-  // Wrap strings and objects
-  const msg = typeof value === 'string'
-    ? value
-    : typeof value === 'object'
-      ? (String((value as Record<string, unknown>).message || JSON.stringify(value)))
-      : String(value)
-
-  const err = new Error(msg)
-  err.name = typeof value === 'object' && (value as Record<string, unknown>).name
-    ? String((value as Record<string, unknown>).name)
-    : 'UnknownError'
-  return err
+/**
+ * Returns the active client, or null if init() has not been called.
+ * Prefer captureException() for most use cases.
+ */
+export function getClient(): CentryClient | null {
+  return _client
 }

@@ -22,8 +22,10 @@ var index_exports = {};
 __export(index_exports, {
   CentryClient: () => CentryClient,
   CentryProvider: () => CentryProvider,
-  installGlobalHandlers: () => installGlobalHandlers,
-  parseDsn: () => parseDsn
+  captureException: () => captureException,
+  getClient: () => getClient,
+  init: () => init,
+  installGlobalHandlers: () => installGlobalHandlers
 });
 module.exports = __toCommonJS(index_exports);
 
@@ -66,20 +68,15 @@ function parseStack(stack) {
 }
 
 // src/types.ts
-function parseDsn(dsn) {
-  const url = new URL(dsn);
-  const publicKey = url.username;
-  const host = url.origin.replace(`//${publicKey}@`, "//");
-  const cleanOrigin = `${url.protocol}//${url.host}`;
-  const projectId = url.pathname.slice(1);
-  const envelopeUrl = `${cleanOrigin}/api/${projectId}/envelope/`;
-  return { publicKey, host: cleanOrigin, projectId, envelopeUrl };
+var CENTRY_HOST = "https://centry.pages.dev";
+function envelopeUrl(project) {
+  return `${CENTRY_HOST}/api/${project}/envelope/`;
 }
 
 // src/core.ts
-function buildEnvelope(event, dsn) {
+function buildEnvelope(event, projectId) {
   const eventJson = JSON.stringify(event);
-  const header = JSON.stringify({ dsn: `${dsn.host}/api/${dsn.projectId}/`, sent_at: (/* @__PURE__ */ new Date()).toISOString() });
+  const header = JSON.stringify({ sent_at: (/* @__PURE__ */ new Date()).toISOString() });
   const itemHeader = JSON.stringify({ type: "event", length: eventJson.length });
   return `${header}
 ${itemHeader}
@@ -152,31 +149,49 @@ async function enrichFrames(frames) {
     frames.map((f) => f.filename).filter((fn) => fn && /^https?:\/\//.test(fn))
   )];
   const sourceMap = /* @__PURE__ */ new Map();
-  await Promise.all(
-    urls.map(async (url) => {
-      sourceMap.set(url, await fetchSourceLines(url));
-    })
-  );
+  await Promise.all(urls.map(async (url) => {
+    sourceMap.set(url, await fetchSourceLines(url));
+  }));
   return frames.map((f) => {
     const lines = sourceMap.get(f.filename) ?? null;
     if (!lines || !f.lineno) return f;
     const idx = f.lineno - 1;
-    const pre = lines.slice(Math.max(0, idx - CONTEXT_LINES), idx);
-    const context = lines[idx];
-    const post = lines.slice(idx + 1, idx + 1 + CONTEXT_LINES);
     return {
       ...f,
-      pre_context: pre,
-      context_line: context,
-      post_context: post
+      pre_context: lines.slice(Math.max(0, idx - CONTEXT_LINES), idx),
+      context_line: lines[idx],
+      post_context: lines.slice(idx + 1, idx + 1 + CONTEXT_LINES)
     };
   });
 }
+function toError(value) {
+  if (value instanceof Error) return value;
+  if (value === null || value === void 0) return null;
+  const msg = typeof value === "string" ? value : typeof value === "object" ? String(value.message || JSON.stringify(value)) : String(value);
+  const err = new Error(msg);
+  err.name = typeof value === "object" && value.name ? String(value.name) : "UnknownError";
+  return err;
+}
+var RateLimiter = class {
+  constructor(max, windowMs) {
+    this.timestamps = [];
+    this.max = max;
+    this.windowMs = windowMs;
+  }
+  allow() {
+    const now = Date.now();
+    this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
+    if (this.timestamps.length >= this.max) return false;
+    this.timestamps.push(now);
+    return true;
+  }
+};
 var CentryClient = class {
   constructor(config) {
     this.recentErrors = /* @__PURE__ */ new Set();
     this.config = config;
-    this.dsn = parseDsn(config.dsn);
+    this.url = envelopeUrl(config.project);
+    this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 6e4);
   }
   /** Capture a manually-caught exception (handled = true). */
   captureException(error) {
@@ -193,10 +208,12 @@ var CentryClient = class {
       const err = toError(error);
       if (!err) return;
       if (err.message === "Script error." || err.message === "Script error") return;
-      const dedupKey = `${err.message}:${err.stack?.slice(0, 120) ?? ""}`;
+      const dedupKey = `${err.name}:${err.message}:${err.stack?.slice(0, 150) ?? ""}`;
       if (this.recentErrors.has(dedupKey)) return;
       this.recentErrors.add(dedupKey);
-      setTimeout(() => this.recentErrors.delete(dedupKey), 3e3);
+      const dedupWindow = this.config.dedupWindowMs ?? 1e4;
+      setTimeout(() => this.recentErrors.delete(dedupKey), dedupWindow);
+      if (!this.rateLimiter.allow()) return;
       const frames = err.stack ? parseStack(err.stack) : [];
       const allowUrls = this.config.allowUrls;
       const rawFrames = frames.map((f) => ({
@@ -213,14 +230,12 @@ var CentryClient = class {
         release: this.config.release,
         breadcrumbs: { values: [] },
         exception: {
-          values: [
-            {
-              type: err.name || "Error",
-              value: err.message,
-              mechanism: { type: handled ? "generic" : "onerror", handled },
-              stacktrace: { frames: enrichedFrames }
-            }
-          ]
+          values: [{
+            type: err.name || "Error",
+            value: err.message,
+            mechanism: { type: handled ? "generic" : "onerror", handled },
+            stacktrace: { frames: enrichedFrames }
+          }]
         },
         contexts: {
           browser,
@@ -239,19 +254,15 @@ var CentryClient = class {
   }
   send(event) {
     try {
-      const envelope = buildEnvelope(event, this.dsn);
-      const authHeader = `Sentry sentry_version=7, sentry_key=${this.dsn.publicKey}`;
+      const envelope = buildEnvelope(event, this.config.project);
       const blob = new Blob([envelope], { type: "text/plain" });
       if (navigator.sendBeacon) {
-        navigator.sendBeacon(this.dsn.envelopeUrl, blob);
+        navigator.sendBeacon(this.url, blob);
       } else {
-        fetch(this.dsn.envelopeUrl, {
+        fetch(this.url, {
           method: "POST",
           body: envelope,
-          headers: {
-            "Content-Type": "text/plain",
-            "X-Sentry-Auth": authHeader
-          },
+          headers: { "Content-Type": "text/plain" },
           keepalive: true
         }).catch(() => {
         });
@@ -260,13 +271,16 @@ var CentryClient = class {
     }
   }
 };
-function toError(value) {
-  if (value instanceof Error) return value;
-  if (value === null || value === void 0) return null;
-  const msg = typeof value === "string" ? value : typeof value === "object" ? String(value.message || JSON.stringify(value)) : String(value);
-  const err = new Error(msg);
-  err.name = typeof value === "object" && value.name ? String(value.name) : "UnknownError";
-  return err;
+var _client = null;
+function init(config) {
+  _client = new CentryClient(config);
+  return _client;
+}
+function captureException(error) {
+  _client?.captureException(error);
+}
+function getClient() {
+  return _client;
 }
 
 // src/integrations/globalHandlers.ts
@@ -298,54 +312,21 @@ function installGlobalHandlers(client) {
   };
 }
 
-// src/integrations/browserApiErrors.ts
-function wrap(client, fn) {
-  return function(...args) {
-    try {
-      return fn.apply(this, args);
-    } catch (err) {
-      client.captureException(err instanceof Error ? err : new Error(String(err)));
-      throw err;
-    }
-  };
-}
-function installBrowserApiErrorsIntegration(client) {
-  const origSetTimeout = window.setTimeout.bind(window);
-  const origSetInterval = window.setInterval.bind(window);
-  const origRaf = window.requestAnimationFrame.bind(window);
-  window.setTimeout = function(fn, delay, ...args) {
-    return origSetTimeout(typeof fn === "function" ? wrap(client, fn) : fn, delay, ...args);
-  };
-  window.setInterval = function(fn, delay, ...args) {
-    return origSetInterval(typeof fn === "function" ? wrap(client, fn) : fn, delay, ...args);
-  };
-  window.requestAnimationFrame = function(fn) {
-    return origRaf(wrap(client, fn));
-  };
-  return () => {
-    window.setTimeout = origSetTimeout;
-    window.setInterval = origSetInterval;
-    window.requestAnimationFrame = origRaf;
-  };
-}
-
 // src/CentryProvider.tsx
 function CentryProvider({ children, ...config }) {
   (0, import_react.useEffect)(() => {
-    const client = new CentryClient(config);
-    const cleanupGlobal = installGlobalHandlers(client);
-    const cleanupBrowserApi = installBrowserApiErrorsIntegration(client);
-    return () => {
-      cleanupGlobal();
-      cleanupBrowserApi();
-    };
-  }, [config.dsn]);
+    const client = init(config);
+    const cleanup = installGlobalHandlers(client);
+    return cleanup;
+  }, [config.project]);
   return children;
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CentryClient,
   CentryProvider,
-  installGlobalHandlers,
-  parseDsn
+  captureException,
+  getClient,
+  init,
+  installGlobalHandlers
 });

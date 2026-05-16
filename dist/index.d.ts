@@ -1,29 +1,42 @@
 import { ReactNode } from 'react';
 
 interface CentryConfig {
-    dsn: string;
+    project: string;
     environment?: string;
     release?: string;
     allowUrls?: RegExp[];
     enabled?: boolean;
+    /** Max errors sent per 60-second window. Defaults to 10. */
+    maxEventsPerMinute?: number;
+    /** How long (ms) to suppress duplicate errors. Defaults to 10000 (10s). */
+    dedupWindowMs?: number;
 }
-interface ParsedDsn {
-    publicKey: string;
-    host: string;
-    projectId: string;
-    envelopeUrl: string;
-}
-declare function parseDsn(dsn: string): ParsedDsn;
 
 interface CentryProviderProps extends CentryConfig {
     children: ReactNode;
 }
+/**
+ * Optional React convenience wrapper. Calls init() on mount and installs
+ * global error handlers. Prefer calling init() directly in your client entry
+ * file if you don't need React context or are using SSR.
+ *
+ * @example
+ * // Using init() directly (recommended):
+ * import { init } from 'centry-client'
+ * init({ project: 'my-project' })
+ *
+ * // Using the provider (optional React convenience):
+ * <CentryProvider project="my-project">
+ *   <App />
+ * </CentryProvider>
+ */
 declare function CentryProvider({ children, ...config }: CentryProviderProps): React.ReactElement;
 
 declare class CentryClient {
     private config;
-    private dsn;
+    private url;
     private recentErrors;
+    private rateLimiter;
     constructor(config: CentryConfig);
     /** Capture a manually-caught exception (handled = true). */
     captureException(error: unknown): void;
@@ -32,6 +45,29 @@ declare class CentryClient {
     private _capture;
     private send;
 }
+/**
+ * Initialize Centry. Call once at application startup, before React mounts.
+ * Subsequent calls replace the active client (useful for hot-reload in dev).
+ *
+ * @example
+ * // client.tsx / main.tsx
+ * import { init } from 'centry-client'
+ * init({ project: 'my-project' })
+ */
+declare function init(config: CentryConfig): CentryClient;
+/**
+ * Capture an exception. No-op if init() has not been called.
+ *
+ * @example
+ * import { captureException } from 'centry-client'
+ * captureException(error)
+ */
+declare function captureException(error: unknown): void;
+/**
+ * Returns the active client, or null if init() has not been called.
+ * Prefer captureException() for most use cases.
+ */
+declare function getClient(): CentryClient | null;
 
 /**
  * Installs window.onerror and window.onunhandledrejection handlers.
@@ -39,4 +75,4 @@ declare class CentryClient {
  */
 declare function installGlobalHandlers(client: CentryClient): () => void;
 
-export { CentryClient, type CentryConfig, CentryProvider, installGlobalHandlers, parseDsn };
+export { CentryClient, type CentryConfig, CentryProvider, captureException, getClient, init, installGlobalHandlers };
