@@ -21,9 +21,9 @@
     "dev": "tsup --watch"
   },
   "devDependencies": {
-    "@types/react": "^19.0.0",
-    "tsup": "^8.0.0",
-    "typescript": "^5.7.0"
+    "@types/react": "^19.2.14",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3"
   },
   "peerDependencies": {
     "react": "^19.0.0"
