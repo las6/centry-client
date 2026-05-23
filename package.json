@@ -21,6 +21,7 @@
     "dev": "tsup --watch"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260517.1",
     "@types/react": "^19.2.14",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3"

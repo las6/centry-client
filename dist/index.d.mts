@@ -81,6 +81,11 @@ declare class WorkerClient {
     private recentErrors;
     private rateLimiter;
     constructor(config: CentryConfig);
+    /**
+     * Capture a caught exception. Optionally pass the `Request` explicitly —
+     * if omitted and withCentry() is being used, the request is picked up
+     * automatically from AsyncLocalStorage context.
+     */
     captureException(error: unknown, request?: Request): void;
     /** For use in unhandled rejection / uncaughtException hooks. */
     captureUnhandled(error: unknown, request?: Request): void;
@@ -88,8 +93,9 @@ declare class WorkerClient {
     private _send;
 }
 /**
- * Initialize Centry for a Cloudflare Worker. Call once at the top of your
- * worker module (outside the fetch/scheduled handlers).
+ * Initialize Centry for a Cloudflare Worker. Call once at module level
+ * (outside fetch/scheduled handlers). Use withCentry() instead if you want
+ * automatic request context and unhandled error capture.
  *
  * @example
  * import { initWorker } from 'centry-client'
@@ -97,14 +103,34 @@ declare class WorkerClient {
  */
 declare function initWorker(config: CentryConfig): WorkerClient;
 /**
- * Capture an exception from a Cloudflare Worker.
- * Pass the `Request` object as the second argument to include HTTP context.
- * No-op if initWorker() has not been called.
+ * Capture an exception from a Cloudflare Worker. If withCentry() is being
+ * used, the current request is attached automatically. Otherwise pass it
+ * explicitly as the second argument.
+ * No-op if neither initWorker() nor withCentry() has been called.
  */
 declare function captureWorkerException(error: unknown, request?: Request): void;
 /**
- * Returns the active worker client, or null if initWorker() has not been called.
+ * Returns the active worker client, or null if not initialised.
  */
 declare function getWorkerClient(): WorkerClient | null;
+type WorkerHandler = ExportedHandler<Record<string, unknown>>;
+/**
+ * Wraps a Cloudflare Worker export with Centry instrumentation. Initialises
+ * the client, stores the incoming Request in AsyncLocalStorage for the
+ * duration of each fetch invocation (so captureWorkerException picks it up
+ * automatically), and catches any unhandled exceptions that bubble up.
+ *
+ * @example
+ * import { withCentry } from 'centry-client'
+ *
+ * export default withCentry(
+ *   { project: 'my-project', environment: 'production' },
+ *   {
+ *     fetch: app.fetch,
+ *     async scheduled(event, env, ctx) { ... },
+ *   }
+ * )
+ */
+declare function withCentry(config: CentryConfig, handler: WorkerHandler): WorkerHandler;
 
-export { CentryClient, type CentryConfig, CentryProvider, WorkerClient, captureException, captureWorkerException, getClient, getWorkerClient, init, initWorker, installGlobalHandlers };
+export { CentryClient, type CentryConfig, CentryProvider, WorkerClient, captureException, captureWorkerException, getClient, getWorkerClient, init, initWorker, installGlobalHandlers, withCentry };

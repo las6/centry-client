@@ -67,30 +67,34 @@ client.captureException(error)
 
 ## Cloudflare Workers
 
-Call `initWorker()` once at module level (outside your `fetch`/`scheduled` handlers). Then use `captureWorkerException()` wherever you catch errors.
+### `withCentry()` — recommended
+
+Wrap your worker export with `withCentry()` for automatic request context and unhandled error capture. No explicit `initWorker()` call needed — the wrapper initialises the client for you.
 
 ```ts
-import { initWorker, captureWorkerException } from 'centry-client'
+import { withCentry, captureWorkerException } from 'centry-client'
 
-initWorker({ project: 'my-project', environment: 'production' })
-
-export default {
-  async fetch(request, env, ctx) {
-    try {
-      return await handleRequest(request)
-    } catch (err) {
-      captureWorkerException(err, request)  // request is optional but recommended
-      return new Response('Internal Server Error', { status: 500 })
-    }
+export default withCentry(
+  { project: 'my-project', environment: 'production' },
+  {
+    fetch: app.fetch,
+    async scheduled(event, env, ctx) { ... },
   }
-}
+)
 ```
 
-Passing the `Request` object as the second argument attaches HTTP context to the event (method, URL, headers), which makes it much easier to reproduce errors.
+Any exception that bubbles up uncaught from `fetch` or `scheduled` is captured automatically. For caught errors, call `captureWorkerException()` as normal — the current request is attached automatically without needing to pass it:
 
-### Hono / framework integration
+```ts
+app.onError((err, c) => {
+  captureWorkerException(err)  // request attached automatically via AsyncLocalStorage
+  return c.json({ error: 'Internal server error' }, 500)
+})
+```
 
-For Hono, the best place is the global error handler — this covers all unhandled errors in a single spot without touching individual routes:
+### `initWorker()` — manual setup
+
+If you're running Centry alongside another wrapper (e.g. `withSentry()`), use `initWorker()` directly instead. Pass the `Request` explicitly where you have it:
 
 ```ts
 import { initWorker, captureWorkerException } from 'centry-client'
@@ -101,6 +105,7 @@ app.onError((err, c) => {
   captureWorkerException(err, c.req.raw)
   return c.json({ error: 'Internal server error' }, 500)
 })
+```
 ```
 
 ---

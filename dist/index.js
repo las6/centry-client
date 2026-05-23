@@ -29,7 +29,8 @@ __export(index_exports, {
   getWorkerClient: () => getWorkerClient,
   init: () => init,
   initWorker: () => initWorker,
-  installGlobalHandlers: () => installGlobalHandlers
+  installGlobalHandlers: () => installGlobalHandlers,
+  withCentry: () => withCentry
 });
 module.exports = __toCommonJS(index_exports);
 
@@ -344,6 +345,15 @@ function toError2(value) {
   err.name = typeof value === "object" && value.name ? String(value.name) : "UnknownError";
   return err;
 }
+function buildRequestContext(request) {
+  const headers = {};
+  const SAFE_HEADERS = ["accept", "content-type", "user-agent", "referer", "cf-ray", "cf-connecting-ip"];
+  for (const key of SAFE_HEADERS) {
+    const val = request.headers.get(key);
+    if (val) headers[key] = val;
+  }
+  return { method: request.method, url: request.url, headers };
+}
 var RateLimiter2 = class {
   constructor(max, windowMs) {
     this.timestamps = [];
@@ -358,6 +368,17 @@ var RateLimiter2 = class {
     return true;
   }
 };
+var _als = void 0;
+function getAls() {
+  if (_als !== void 0) return _als;
+  try {
+    const ALS = globalThis["AsyncLocalStorage"];
+    _als = ALS ? new ALS() : null;
+  } catch {
+    _als = null;
+  }
+  return _als;
+}
 var WorkerClient = class {
   constructor(config) {
     this.recentErrors = /* @__PURE__ */ new Set();
@@ -365,12 +386,17 @@ var WorkerClient = class {
     this.url = envelopeUrl(config.project);
     this.rateLimiter = new RateLimiter2(config.maxEventsPerMinute ?? 10, 6e4);
   }
+  /**
+   * Capture a caught exception. Optionally pass the `Request` explicitly —
+   * if omitted and withCentry() is being used, the request is picked up
+   * automatically from AsyncLocalStorage context.
+   */
   captureException(error, request) {
-    void this._capture(error, true, request);
+    void this._capture(error, true, request ?? getAls()?.getStore());
   }
   /** For use in unhandled rejection / uncaughtException hooks. */
   captureUnhandled(error, request) {
-    void this._capture(error, false, request);
+    void this._capture(error, false, request ?? getAls()?.getStore());
   }
   async _capture(error, handled, request) {
     try {
@@ -405,17 +431,7 @@ var WorkerClient = class {
         }
       };
       if (request) {
-        const headers = {};
-        const SAFE_HEADERS = ["accept", "content-type", "user-agent", "referer", "cf-ray", "cf-connecting-ip"];
-        for (const key of SAFE_HEADERS) {
-          const val = request.headers.get(key);
-          if (val) headers[key] = val;
-        }
-        event["request"] = {
-          method: request.method,
-          url: request.url,
-          headers
-        };
+        event["request"] = buildRequestContext(request);
       }
       await this._send(event);
     } catch {
@@ -444,6 +460,43 @@ function captureWorkerException(error, request) {
 function getWorkerClient() {
   return _workerClient;
 }
+function withCentry(config, handler) {
+  const client = initWorker(config);
+  const als = getAls();
+  const wrapped = {};
+  if (handler.fetch) {
+    const originalFetch = handler.fetch;
+    wrapped.fetch = async (request, env, ctx) => {
+      const run = () => Promise.resolve(
+        originalFetch(
+          request,
+          env,
+          ctx
+        )
+      ).catch((err) => {
+        client.captureUnhandled(err, request);
+        throw err;
+      });
+      return als ? als.run(request, run) : run();
+    };
+  }
+  if (handler.scheduled) {
+    const originalScheduled = handler.scheduled;
+    wrapped.scheduled = async (event, env, ctx) => {
+      try {
+        await originalScheduled(
+          event,
+          env,
+          ctx
+        );
+      } catch (err) {
+        client.captureUnhandled(err);
+        throw err;
+      }
+    };
+  }
+  return wrapped;
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CentryClient,
@@ -455,5 +508,6 @@ function getWorkerClient() {
   getWorkerClient,
   init,
   initWorker,
-  installGlobalHandlers
+  installGlobalHandlers,
+  withCentry
 });

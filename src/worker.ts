@@ -35,6 +35,16 @@ function toError(value: unknown): Error | null {
   return err
 }
 
+function buildRequestContext(request: Request): Record<string, unknown> {
+  const headers: Record<string, string> = {}
+  const SAFE_HEADERS = ['accept', 'content-type', 'user-agent', 'referer', 'cf-ray', 'cf-connecting-ip']
+  for (const key of SAFE_HEADERS) {
+    const val = request.headers.get(key)
+    if (val) headers[key] = val
+  }
+  return { method: request.method, url: request.url, headers }
+}
+
 // ── Rate limiter ──────────────────────────────────────────────────────────────
 
 class RateLimiter {
@@ -56,6 +66,30 @@ class RateLimiter {
   }
 }
 
+// ── Request context (AsyncLocalStorage) ──────────────────────────────────────
+// Stores the current request for the duration of a fetch handler invocation so
+// captureWorkerException() can attach it automatically without being passed it.
+
+type ALS = { getStore(): Request | undefined; run<T>(store: Request, fn: () => T): T }
+
+// AsyncLocalStorage is available in CF Workers (and Node 16+). We access it
+// lazily so the module doesn't hard-fail in environments that lack it.
+let _als: ALS | null | undefined = undefined // undefined = not yet resolved
+
+function getAls(): ALS | null {
+  if (_als !== undefined) return _als
+  try {
+    // CF Workers expose AsyncLocalStorage on globalThis
+    const ALS = (globalThis as Record<string, unknown>)['AsyncLocalStorage'] as
+      | (new () => ALS)
+      | undefined
+    _als = ALS ? new ALS() : null
+  } catch {
+    _als = null
+  }
+  return _als
+}
+
 // ── WorkerClient ──────────────────────────────────────────────────────────────
 
 export class WorkerClient {
@@ -70,13 +104,18 @@ export class WorkerClient {
     this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 60_000)
   }
 
+  /**
+   * Capture a caught exception. Optionally pass the `Request` explicitly —
+   * if omitted and withCentry() is being used, the request is picked up
+   * automatically from AsyncLocalStorage context.
+   */
   captureException(error: unknown, request?: Request): void {
-    void this._capture(error, true, request)
+    void this._capture(error, true, request ?? getAls()?.getStore())
   }
 
   /** For use in unhandled rejection / uncaughtException hooks. */
   captureUnhandled(error: unknown, request?: Request): void {
-    void this._capture(error, false, request)
+    void this._capture(error, false, request ?? getAls()?.getStore())
   }
 
   private async _capture(error: unknown, handled: boolean, request?: Request): Promise<void> {
@@ -120,18 +159,7 @@ export class WorkerClient {
       }
 
       if (request) {
-        const headers: Record<string, string> = {}
-        // Capture useful headers, skip anything sensitive (Authorization, Cookie)
-        const SAFE_HEADERS = ['accept', 'content-type', 'user-agent', 'referer', 'cf-ray', 'cf-connecting-ip']
-        for (const key of SAFE_HEADERS) {
-          const val = request.headers.get(key)
-          if (val) headers[key] = val
-        }
-        event['request'] = {
-          method: request.method,
-          url: request.url,
-          headers,
-        }
+        event['request'] = buildRequestContext(request)
       }
 
       await this._send(event)
@@ -159,8 +187,9 @@ export class WorkerClient {
 let _workerClient: WorkerClient | null = null
 
 /**
- * Initialize Centry for a Cloudflare Worker. Call once at the top of your
- * worker module (outside the fetch/scheduled handlers).
+ * Initialize Centry for a Cloudflare Worker. Call once at module level
+ * (outside fetch/scheduled handlers). Use withCentry() instead if you want
+ * automatic request context and unhandled error capture.
  *
  * @example
  * import { initWorker } from 'centry-client'
@@ -172,17 +201,79 @@ export function initWorker(config: CentryConfig): WorkerClient {
 }
 
 /**
- * Capture an exception from a Cloudflare Worker.
- * Pass the `Request` object as the second argument to include HTTP context.
- * No-op if initWorker() has not been called.
+ * Capture an exception from a Cloudflare Worker. If withCentry() is being
+ * used, the current request is attached automatically. Otherwise pass it
+ * explicitly as the second argument.
+ * No-op if neither initWorker() nor withCentry() has been called.
  */
 export function captureWorkerException(error: unknown, request?: Request): void {
   _workerClient?.captureException(error, request)
 }
 
 /**
- * Returns the active worker client, or null if initWorker() has not been called.
+ * Returns the active worker client, or null if not initialised.
  */
 export function getWorkerClient(): WorkerClient | null {
   return _workerClient
+}
+
+// ── withCentry ────────────────────────────────────────────────────────────────
+
+type WorkerHandler = ExportedHandler<Record<string, unknown>>
+
+/**
+ * Wraps a Cloudflare Worker export with Centry instrumentation. Initialises
+ * the client, stores the incoming Request in AsyncLocalStorage for the
+ * duration of each fetch invocation (so captureWorkerException picks it up
+ * automatically), and catches any unhandled exceptions that bubble up.
+ *
+ * @example
+ * import { withCentry } from 'centry-client'
+ *
+ * export default withCentry(
+ *   { project: 'my-project', environment: 'production' },
+ *   {
+ *     fetch: app.fetch,
+ *     async scheduled(event, env, ctx) { ... },
+ *   }
+ * )
+ */
+export function withCentry(config: CentryConfig, handler: WorkerHandler): WorkerHandler {
+  const client = initWorker(config)
+  const als = getAls()
+
+  const wrapped: WorkerHandler = {}
+
+  if (handler.fetch) {
+    const originalFetch = handler.fetch
+    wrapped.fetch = async (request: Request, env: unknown, ctx: ExecutionContext) => {
+      const run = () =>
+        Promise.resolve(
+          (originalFetch as (req: Request, env: unknown, ctx: ExecutionContext) => Response | Promise<Response>)(
+            request, env, ctx,
+          ),
+        ).catch((err: unknown) => {
+          client.captureUnhandled(err, request)
+          throw err
+        })
+
+      return als ? als.run(request, run) : run()
+    }
+  }
+
+  if (handler.scheduled) {
+    const originalScheduled = handler.scheduled
+    wrapped.scheduled = async (event: ScheduledController, env: unknown, ctx: ExecutionContext) => {
+      try {
+        await (originalScheduled as (e: ScheduledController, env: unknown, ctx: ExecutionContext) => Promise<void>)(
+          event, env, ctx,
+        )
+      } catch (err) {
+        client.captureUnhandled(err)
+        throw err
+      }
+    }
+  }
+
+  return wrapped
 }
