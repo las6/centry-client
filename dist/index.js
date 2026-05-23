@@ -365,14 +365,14 @@ var WorkerClient = class {
     this.url = envelopeUrl(config.project);
     this.rateLimiter = new RateLimiter2(config.maxEventsPerMinute ?? 10, 6e4);
   }
-  captureException(error) {
-    void this._capture(error, true);
+  captureException(error, request) {
+    void this._capture(error, true, request);
   }
   /** For use in unhandled rejection / uncaughtException hooks. */
-  captureUnhandled(error) {
-    void this._capture(error, false);
+  captureUnhandled(error, request) {
+    void this._capture(error, false, request);
   }
-  async _capture(error, handled) {
+  async _capture(error, handled, request) {
     try {
       if (this.config.enabled === false) return;
       const err = toError2(error);
@@ -404,6 +404,19 @@ var WorkerClient = class {
           runtime: { name: "cloudflare-worker" }
         }
       };
+      if (request) {
+        const headers = {};
+        const SAFE_HEADERS = ["accept", "content-type", "user-agent", "referer", "cf-ray", "cf-connecting-ip"];
+        for (const key of SAFE_HEADERS) {
+          const val = request.headers.get(key);
+          if (val) headers[key] = val;
+        }
+        event["request"] = {
+          method: request.method,
+          url: request.url,
+          headers
+        };
+      }
       await this._send(event);
     } catch {
     }
@@ -425,8 +438,8 @@ function initWorker(config) {
   _workerClient = new WorkerClient(config);
   return _workerClient;
 }
-function captureWorkerException(error) {
-  _workerClient?.captureException(error);
+function captureWorkerException(error, request) {
+  _workerClient?.captureException(error, request);
 }
 function getWorkerClient() {
   return _workerClient;

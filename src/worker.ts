@@ -70,16 +70,16 @@ export class WorkerClient {
     this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 60_000)
   }
 
-  captureException(error: unknown): void {
-    void this._capture(error, true)
+  captureException(error: unknown, request?: Request): void {
+    void this._capture(error, true, request)
   }
 
   /** For use in unhandled rejection / uncaughtException hooks. */
-  captureUnhandled(error: unknown): void {
-    void this._capture(error, false)
+  captureUnhandled(error: unknown, request?: Request): void {
+    void this._capture(error, false, request)
   }
 
-  private async _capture(error: unknown, handled: boolean): Promise<void> {
+  private async _capture(error: unknown, handled: boolean, request?: Request): Promise<void> {
     try {
       if (this.config.enabled === false) return
 
@@ -117,6 +117,21 @@ export class WorkerClient {
         contexts: {
           runtime: { name: 'cloudflare-worker' },
         },
+      }
+
+      if (request) {
+        const headers: Record<string, string> = {}
+        // Capture useful headers, skip anything sensitive (Authorization, Cookie)
+        const SAFE_HEADERS = ['accept', 'content-type', 'user-agent', 'referer', 'cf-ray', 'cf-connecting-ip']
+        for (const key of SAFE_HEADERS) {
+          const val = request.headers.get(key)
+          if (val) headers[key] = val
+        }
+        event['request'] = {
+          method: request.method,
+          url: request.url,
+          headers,
+        }
       }
 
       await this._send(event)
@@ -158,10 +173,11 @@ export function initWorker(config: CentryConfig): WorkerClient {
 
 /**
  * Capture an exception from a Cloudflare Worker.
+ * Pass the `Request` object as the second argument to include HTTP context.
  * No-op if initWorker() has not been called.
  */
-export function captureWorkerException(error: unknown): void {
-  _workerClient?.captureException(error)
+export function captureWorkerException(error: unknown, request?: Request): void {
+  _workerClient?.captureException(error, request)
 }
 
 /**

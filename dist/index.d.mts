@@ -81,9 +81,9 @@ declare class WorkerClient {
     private recentErrors;
     private rateLimiter;
     constructor(config: CentryConfig);
-    captureException(error: unknown): void;
+    captureException(error: unknown, request?: Request): void;
     /** For use in unhandled rejection / uncaughtException hooks. */
-    captureUnhandled(error: unknown): void;
+    captureUnhandled(error: unknown, request?: Request): void;
     private _capture;
     private _send;
 }
@@ -98,9 +98,10 @@ declare class WorkerClient {
 declare function initWorker(config: CentryConfig): WorkerClient;
 /**
  * Capture an exception from a Cloudflare Worker.
+ * Pass the `Request` object as the second argument to include HTTP context.
  * No-op if initWorker() has not been called.
  */
-declare function captureWorkerException(error: unknown): void;
+declare function captureWorkerException(error: unknown, request?: Request): void;
 /**
  * Returns the active worker client, or null if initWorker() has not been called.
  */
