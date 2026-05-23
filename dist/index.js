@@ -22,9 +22,13 @@ var index_exports = {};
 __export(index_exports, {
   CentryClient: () => CentryClient,
   CentryProvider: () => CentryProvider,
+  WorkerClient: () => WorkerClient,
   captureException: () => captureException,
+  captureWorkerException: () => captureWorkerException,
   getClient: () => getClient,
+  getWorkerClient: () => getWorkerClient,
   init: () => init,
+  initWorker: () => initWorker,
   installGlobalHandlers: () => installGlobalHandlers
 });
 module.exports = __toCommonJS(index_exports);
@@ -321,12 +325,122 @@ function CentryProvider({ children, ...config }) {
   }, [config.project]);
   return children;
 }
+
+// src/worker.ts
+function buildEnvelope2(event) {
+  const eventJson = JSON.stringify(event);
+  const header = JSON.stringify({ sent_at: (/* @__PURE__ */ new Date()).toISOString() });
+  const itemHeader = JSON.stringify({ type: "event", length: eventJson.length });
+  return `${header}
+${itemHeader}
+${eventJson}
+`;
+}
+function toError2(value) {
+  if (value instanceof Error) return value;
+  if (value === null || value === void 0) return null;
+  const msg = typeof value === "string" ? value : typeof value === "object" ? String(value.message || JSON.stringify(value)) : String(value);
+  const err = new Error(msg);
+  err.name = typeof value === "object" && value.name ? String(value.name) : "UnknownError";
+  return err;
+}
+var RateLimiter2 = class {
+  constructor(max, windowMs) {
+    this.timestamps = [];
+    this.max = max;
+    this.windowMs = windowMs;
+  }
+  allow() {
+    const now = Date.now();
+    this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
+    if (this.timestamps.length >= this.max) return false;
+    this.timestamps.push(now);
+    return true;
+  }
+};
+var WorkerClient = class {
+  constructor(config) {
+    this.recentErrors = /* @__PURE__ */ new Set();
+    this.config = config;
+    this.url = envelopeUrl(config.project);
+    this.rateLimiter = new RateLimiter2(config.maxEventsPerMinute ?? 10, 6e4);
+  }
+  captureException(error) {
+    void this._capture(error, true);
+  }
+  /** For use in unhandled rejection / uncaughtException hooks. */
+  captureUnhandled(error) {
+    void this._capture(error, false);
+  }
+  async _capture(error, handled) {
+    try {
+      if (this.config.enabled === false) return;
+      const err = toError2(error);
+      if (!err) return;
+      const dedupKey = `${err.name}:${err.message}:${err.stack?.slice(0, 150) ?? ""}`;
+      if (this.recentErrors.has(dedupKey)) return;
+      this.recentErrors.add(dedupKey);
+      const dedupWindow = this.config.dedupWindowMs ?? 1e4;
+      setTimeout(() => this.recentErrors.delete(dedupKey), dedupWindow);
+      if (!this.rateLimiter.allow()) return;
+      const frames = err.stack ? parseStack(err.stack) : [];
+      const event = {
+        event_id: crypto.randomUUID().replace(/-/g, ""),
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        level: "error",
+        environment: this.config.environment,
+        release: this.config.release,
+        exception: {
+          values: [
+            {
+              type: err.name || "Error",
+              value: err.message,
+              mechanism: { type: handled ? "generic" : "onerror", handled },
+              stacktrace: { frames }
+            }
+          ]
+        },
+        contexts: {
+          runtime: { name: "cloudflare-worker" }
+        }
+      };
+      await this._send(event);
+    } catch {
+    }
+  }
+  async _send(event) {
+    try {
+      const envelope = buildEnvelope2(event);
+      await fetch(this.url, {
+        method: "POST",
+        body: envelope,
+        headers: { "Content-Type": "text/plain" }
+      });
+    } catch {
+    }
+  }
+};
+var _workerClient = null;
+function initWorker(config) {
+  _workerClient = new WorkerClient(config);
+  return _workerClient;
+}
+function captureWorkerException(error) {
+  _workerClient?.captureException(error);
+}
+function getWorkerClient() {
+  return _workerClient;
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CentryClient,
   CentryProvider,
+  WorkerClient,
   captureException,
+  captureWorkerException,
   getClient,
+  getWorkerClient,
   init,
+  initWorker,
   installGlobalHandlers
 });

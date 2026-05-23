@@ -75,4 +75,35 @@ declare function getClient(): CentryClient | null;
  */
 declare function installGlobalHandlers(client: CentryClient): () => void;
 
-export { CentryClient, type CentryConfig, CentryProvider, captureException, getClient, init, installGlobalHandlers };
+declare class WorkerClient {
+    private config;
+    private url;
+    private recentErrors;
+    private rateLimiter;
+    constructor(config: CentryConfig);
+    captureException(error: unknown): void;
+    /** For use in unhandled rejection / uncaughtException hooks. */
+    captureUnhandled(error: unknown): void;
+    private _capture;
+    private _send;
+}
+/**
+ * Initialize Centry for a Cloudflare Worker. Call once at the top of your
+ * worker module (outside the fetch/scheduled handlers).
+ *
+ * @example
+ * import { initWorker } from 'centry-client'
+ * initWorker({ project: 'my-project', environment: 'production' })
+ */
+declare function initWorker(config: CentryConfig): WorkerClient;
+/**
+ * Capture an exception from a Cloudflare Worker.
+ * No-op if initWorker() has not been called.
+ */
+declare function captureWorkerException(error: unknown): void;
+/**
+ * Returns the active worker client, or null if initWorker() has not been called.
+ */
+declare function getWorkerClient(): WorkerClient | null;
+
+export { CentryClient, type CentryConfig, CentryProvider, WorkerClient, captureException, captureWorkerException, getClient, getWorkerClient, init, initWorker, installGlobalHandlers };
