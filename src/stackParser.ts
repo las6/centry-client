@@ -14,7 +14,7 @@ const CHROME_RE = /^\s*at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?\s*$/
 
 // Firefox/Safari: "functionName@filename:line:col"
 //                 "@filename:line:col"
-const FIREFOX_RE = /^(?:(.+?)@)?(.+?):(\d+)(?::(\d+))?\s*$/
+const FIREFOX_RE = /^(?:(.*?)@)?(.+?):(\d+)(?::(\d+))?\s*$/
 
 function parseChromeLine(line: string): ParsedFrame | null {
   const m = CHROME_RE.exec(line)

@@ -4,7 +4,7 @@ import { envelopeUrl } from './types'
 
 // ── Envelope builder ──────────────────────────────────────────────────────────
 
-function buildEnvelope(event: Record<string, unknown>, projectId: string): string {
+function buildEnvelope(event: Record<string, unknown>): string {
   const eventJson = JSON.stringify(event)
   const header = JSON.stringify({ sent_at: new Date().toISOString() })
   const itemHeader = JSON.stringify({ type: 'event', length: eventJson.length })
@@ -242,7 +242,7 @@ export class CentryClient {
 
   private send(event: Record<string, unknown>): void {
     try {
-      const envelope = buildEnvelope(event, this.config.project)
+      const envelope = buildEnvelope(event)
       const blob = new Blob([envelope], { type: 'text/plain' })
 
       if (navigator.sendBeacon) {
