@@ -3,7 +3,7 @@ import { useEffect } from "react";
 
 // src/stackParser.ts
 var CHROME_RE = /^\s*at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?\s*$/;
-var FIREFOX_RE = /^(?:(.+?)@)?(.+?):(\d+)(?::(\d+))?\s*$/;
+var FIREFOX_RE = /^(?:(.*?)@)?(.+?):(\d+)(?::(\d+))?\s*$/;
 function parseChromeLine(line) {
   const m = CHROME_RE.exec(line);
   if (!m) return null;
@@ -43,7 +43,7 @@ function envelopeUrl(project) {
 }
 
 // src/core.ts
-function buildEnvelope(event, projectId) {
+function buildEnvelope(event) {
   const eventJson = JSON.stringify(event);
   const header = JSON.stringify({ sent_at: (/* @__PURE__ */ new Date()).toISOString() });
   const itemHeader = JSON.stringify({ type: "event", length: eventJson.length });
@@ -223,7 +223,7 @@ var CentryClient = class {
   }
   send(event) {
     try {
-      const envelope = buildEnvelope(event, this.config.project);
+      const envelope = buildEnvelope(event);
       const blob = new Blob([envelope], { type: "text/plain" });
       if (navigator.sendBeacon) {
         navigator.sendBeacon(this.url, blob);
