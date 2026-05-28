@@ -6,4 +6,9 @@ export default defineConfig({
   dts: true,
   clean: true,
   external: ['react'],
+  esbuildOptions(options) {
+    // CJS builds replace import.meta with {} — env?.MODE safely falls back to
+    // 'production', which is correct for non-Vite/Node environments.
+    options.logOverride = { 'empty-import-meta': 'silent' }
+  },
 })
