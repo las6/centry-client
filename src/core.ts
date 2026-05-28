@@ -1,6 +1,7 @@
 import { parseStack } from './stackParser'
 import type { CentryConfig } from './types'
 import { envelopeUrl } from './types'
+import { scrubUrl } from './utils'
 
 // ── Envelope builder ──────────────────────────────────────────────────────────
 
@@ -226,9 +227,9 @@ export class CentryClient {
           browser,
           os,
           page: {
-            url: location.href,
-            'http.query': location.search,
-            referer: document.referrer,
+            url: scrubUrl(location.href),
+            'http.query': scrubUrl(location.search),
+            referer: scrubUrl(document.referrer),
           },
           runtime: { name: 'javascript' },
         },

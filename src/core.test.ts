@@ -184,6 +184,30 @@ describe('CentryClient', () => {
       await drain()
       expect(vi.mocked(navigator.sendBeacon).mock.calls).toHaveLength(0)
     })
+
+    it('scrubs sensitive query parameters from URLs', async () => {
+      // Mock location and document.referrer
+      const origLocation = window.location
+      const origReferrer = document.referrer
+
+      // Use Object.defineProperty because window.location is often read-only in test environments
+      delete (window as any).location
+      window.location = new URL('https://example.com/page?token=secret&user=jules') as any
+      Object.defineProperty(document, 'referrer', { value: 'https://referrer.com/?api_key=123', configurable: true })
+
+      const client = new CentryClient({ project: 'p' })
+      client.captureException(new Error('test'))
+      await drain()
+
+      const event = await parseEvent(0)
+      expect(event.contexts.page.url).toBe('https://example.com/page?token=%5Bfiltered%5D&user=jules')
+      expect(event.contexts.page['http.query']).toBe('?token=%5Bfiltered%5D&user=jules')
+      expect(event.contexts.page.referer).toBe('https://referrer.com/?api_key=%5Bfiltered%5D')
+
+      // Restore
+      window.location = origLocation
+      Object.defineProperty(document, 'referrer', { value: origReferrer, configurable: true })
+    })
   })
 })
 
