@@ -141,6 +141,12 @@ function toError(value) {
   err.name = typeof value === "object" && value.name ? String(value.name) : "UnknownError";
   return err;
 }
+function normalizeForDedup(url) {
+  const q = url.indexOf("?");
+  if (q === -1) return url;
+  const path = url.slice(0, q);
+  return /\.[a-z0-9]{2,8}$/i.test(path) ? path : url;
+}
 var RateLimiter = class {
   constructor(max, windowMs) {
     this.timestamps = [];
@@ -158,7 +164,10 @@ var RateLimiter = class {
 var CentryClient = class {
   constructor(config) {
     this.recentErrors = /* @__PURE__ */ new Set();
-    this.config = config;
+    this.config = {
+      ...config,
+      environment: config.environment ?? import.meta.env?.MODE ?? "production"
+    };
     this.url = envelopeUrl(config.project);
     this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 6e4);
   }
@@ -177,18 +186,20 @@ var CentryClient = class {
       const err = toError(error);
       if (!err) return;
       if (err.message === "Script error." || err.message === "Script error") return;
-      const dedupKey = `${err.name}:${err.message}:${err.stack?.slice(0, 150) ?? ""}`;
-      if (this.recentErrors.has(dedupKey)) return;
-      this.recentErrors.add(dedupKey);
-      const dedupWindow = this.config.dedupWindowMs ?? 1e4;
-      setTimeout(() => this.recentErrors.delete(dedupKey), dedupWindow);
-      if (!this.rateLimiter.allow()) return;
       const frames = err.stack ? parseStack(err.stack) : [];
       const allowUrls = this.config.allowUrls;
       const rawFrames = frames.map((f) => ({
         ...f,
         in_app: !allowUrls || allowUrls.some((re) => re.test(f.filename))
       }));
+      const firstFrame = rawFrames.find((f) => f.in_app) ?? rawFrames[0];
+      const fileKey = firstFrame ? normalizeForDedup(firstFrame.filename) : "";
+      const dedupKey = `${err.name}:${err.message}:${fileKey}`;
+      if (this.recentErrors.has(dedupKey)) return;
+      this.recentErrors.add(dedupKey);
+      const dedupWindow = this.config.dedupWindowMs ?? 1e4;
+      setTimeout(() => this.recentErrors.delete(dedupKey), dedupWindow);
+      if (!this.rateLimiter.allow()) return;
       const enrichedFrames = await enrichFrames(rawFrames);
       const { browser, os } = parseUa();
       const event = {

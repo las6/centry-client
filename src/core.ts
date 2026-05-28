@@ -130,6 +130,17 @@ function toError(value: unknown): Error | null {
   return err
 }
 
+// ── Dedup helpers ─────────────────────────────────────────────────────────────
+
+function normalizeForDedup(url: string): string {
+  const q = url.indexOf('?')
+  if (q === -1) return url
+  const path = url.slice(0, q)
+  // If path has a file extension, strip all query params (they're cache busters)
+  // Otherwise keep them (extensionless paths may encode route params in query)
+  return /\.[a-z0-9]{2,8}$/i.test(path) ? path : url
+}
+
 // ── Rate limiter ──────────────────────────────────────────────────────────────
 // Sliding window: tracks timestamps of recent sends and drops if over the cap.
 
@@ -161,7 +172,10 @@ export class CentryClient {
   private rateLimiter: RateLimiter
 
   constructor(config: CentryConfig) {
-    this.config = config
+    this.config = {
+      ...config,
+      environment: config.environment ?? import.meta.env?.MODE ?? 'production',
+    }
     this.url = envelopeUrl(config.project)
     this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 60_000)
   }
@@ -187,8 +201,17 @@ export class CentryClient {
       // Filter cross-origin noise
       if (err.message === 'Script error.' || err.message === 'Script error') return
 
-      // Client-side dedup — same error fingerprint within dedupWindowMs (default 10s)
-      const dedupKey = `${err.name}:${err.message}:${err.stack?.slice(0, 150) ?? ''}`
+      const frames = err.stack ? parseStack(err.stack) : []
+      const allowUrls = this.config.allowUrls
+      const rawFrames: FrameRaw[] = frames.map((f) => ({
+        ...f,
+        in_app: !allowUrls || allowUrls.some((re) => re.test(f.filename)),
+      }))
+
+      // Client-side dedup — filename-based fingerprint within dedupWindowMs (default 10s)
+      const firstFrame = rawFrames.find(f => f.in_app) ?? rawFrames[0]
+      const fileKey = firstFrame ? normalizeForDedup(firstFrame.filename) : ''
+      const dedupKey = `${err.name}:${err.message}:${fileKey}`
       if (this.recentErrors.has(dedupKey)) return
       this.recentErrors.add(dedupKey)
       const dedupWindow = this.config.dedupWindowMs ?? 10_000
@@ -196,13 +219,6 @@ export class CentryClient {
 
       // Rate limit — hard cap per minute, protects against runaway loops
       if (!this.rateLimiter.allow()) return
-
-      const frames = err.stack ? parseStack(err.stack) : []
-      const allowUrls = this.config.allowUrls
-      const rawFrames: FrameRaw[] = frames.map((f) => ({
-        ...f,
-        in_app: !allowUrls || allowUrls.some((re) => re.test(f.filename)),
-      }))
 
       const enrichedFrames = await enrichFrames(rawFrames)
       const { browser, os } = parseUa()
