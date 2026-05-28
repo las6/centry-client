@@ -6,6 +6,7 @@
 import { parseStack } from './stackParser'
 import type { CentryConfig } from './types'
 import { envelopeUrl } from './types'
+import { scrubUrl } from './utils'
 
 // ── Envelope builder ──────────────────────────────────────────────────────────
 
@@ -42,7 +43,7 @@ function buildRequestContext(request: Request): Record<string, unknown> {
     const val = request.headers.get(key)
     if (val) headers[key] = val
   }
-  return { method: request.method, url: request.url, headers }
+  return { method: request.method, url: scrubUrl(request.url), headers }
 }
 
 // ── Rate limiter ──────────────────────────────────────────────────────────────

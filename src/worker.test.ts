@@ -143,6 +143,15 @@ describe('WorkerClient', () => {
       expect(headers['authorization']).toBeUndefined()
       expect(headers['cookie']).toBeUndefined()
     })
+
+    it('scrubs sensitive query parameters from the URL', async () => {
+      const req = new Request('https://api.example.com/v1/user?token=secret&api_key=123')
+      client.captureException(new Error('test'), req)
+      await vi.runAllTimersAsync()
+
+      const event = JSON.parse(fetchCalls()[0].body.split('\n')[2])
+      expect(event.request.url).toBe('https://api.example.com/v1/user?token=%5Bfiltered%5D&api_key=%5Bfiltered%5D')
+    })
   })
 
   describe('dedup', () => {
