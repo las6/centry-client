@@ -5,7 +5,7 @@ Lightweight error tracking SDK for [Centry](https://github.com/las6/centry). Sup
 ## Install
 
 ```bash
-npm install github:las6/centry-client
+npm install las6/centry-client
 ```
 
 ---
