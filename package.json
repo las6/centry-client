@@ -1,6 +1,6 @@
 {
   "name": "centry-client",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Lightweight error tracking SDK for Centry",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -21,12 +21,13 @@
   },
   "scripts": {
     "build": "tsup",
+    "prepublishOnly": "tsup",
     "dev": "tsup --watch",
     "lint": "oxlint",
     "test": "vitest run"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260526.1",
+    "@cloudflare/workers-types": "^4.20260527.1",
     "@types/react": "^19.2.15",
     "happy-dom": "^20.9.0",
     "oxlint": "^1.67.0",
