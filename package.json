@@ -42,5 +42,8 @@
     "type": "git",
     "url": "https://github.com/las6/centry-client.git"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "centry-client": "0.2.1"
+  }
 }
