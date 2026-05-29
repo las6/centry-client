@@ -37,8 +37,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260527.1",
-    "@types/node": "^22.0.0",
+    "@cloudflare/workers-types": "^4.20260528.1",
+    "@types/node": "^25.9.1",
     "@types/react": "^19.2.15",
     "happy-dom": "^20.9.0",
     "oxlint": "^1.67.0",
