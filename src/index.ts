@@ -1,5 +1,4 @@
 export { CentryProvider } from './CentryProvider'
-export { CentryClient, init, captureException, getClient } from './core'
+export { CentryClient, init, captureException, captureMessage, getClient } from './core'
 export type { CentryConfig } from './types'
 export { installGlobalHandlers } from './integrations/globalHandlers'
-export { WorkerClient, initWorker, captureWorkerException, getWorkerClient, withCentry } from './worker'

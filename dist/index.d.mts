@@ -42,7 +42,16 @@ declare class CentryClient {
     captureException(error: unknown): void;
     /** Internal: capture an unhandled exception (handled = false). Used by globalHandlers. */
     captureUnhandled(error: unknown): void;
+    /**
+     * Capture a plain message (non-exception). Level defaults to 'info'.
+     *
+     * @example
+     * import { captureMessage } from 'centry-client'
+     * captureMessage('Payment processed', 'info')
+     */
+    captureMessage(message: string, level?: 'info' | 'warning' | 'error'): void;
     private _capture;
+    private _captureMessage;
     private send;
 }
 /**
@@ -64,6 +73,15 @@ declare function init(config: CentryConfig): CentryClient;
  */
 declare function captureException(error: unknown): void;
 /**
+ * Capture a plain message. Level defaults to 'info'.
+ * No-op if init() has not been called.
+ *
+ * @example
+ * import { captureMessage } from 'centry-client'
+ * captureMessage('Checkout completed', 'info')
+ */
+declare function captureMessage(message: string, level?: 'info' | 'warning' | 'error'): void;
+/**
  * Returns the active client, or null if init() has not been called.
  * Prefer captureException() for most use cases.
  */
@@ -75,62 +93,4 @@ declare function getClient(): CentryClient | null;
  */
 declare function installGlobalHandlers(client: CentryClient): () => void;
 
-declare class WorkerClient {
-    private config;
-    private url;
-    private recentErrors;
-    private rateLimiter;
-    constructor(config: CentryConfig);
-    /**
-     * Capture a caught exception. Optionally pass the `Request` explicitly —
-     * if omitted and withCentry() is being used, the request is picked up
-     * automatically from AsyncLocalStorage context.
-     */
-    captureException(error: unknown, request?: Request): void;
-    /** For use in unhandled rejection / uncaughtException hooks. */
-    captureUnhandled(error: unknown, request?: Request): void;
-    private _capture;
-    private _send;
-}
-/**
- * Initialize Centry for a Cloudflare Worker. Call once at module level
- * (outside fetch/scheduled handlers). Use withCentry() instead if you want
- * automatic request context and unhandled error capture.
- *
- * @example
- * import { initWorker } from 'centry-client'
- * initWorker({ project: 'my-project', environment: 'production' })
- */
-declare function initWorker(config: CentryConfig): WorkerClient;
-/**
- * Capture an exception from a Cloudflare Worker. If withCentry() is being
- * used, the current request is attached automatically. Otherwise pass it
- * explicitly as the second argument.
- * No-op if neither initWorker() nor withCentry() has been called.
- */
-declare function captureWorkerException(error: unknown, request?: Request): void;
-/**
- * Returns the active worker client, or null if not initialised.
- */
-declare function getWorkerClient(): WorkerClient | null;
-type WorkerHandler = ExportedHandler<Record<string, unknown>>;
-/**
- * Wraps a Cloudflare Worker export with Centry instrumentation. Initialises
- * the client, stores the incoming Request in AsyncLocalStorage for the
- * duration of each fetch invocation (so captureWorkerException picks it up
- * automatically), and catches any unhandled exceptions that bubble up.
- *
- * @example
- * import { withCentry } from 'centry-client'
- *
- * export default withCentry(
- *   { project: 'my-project', environment: 'production' },
- *   {
- *     fetch: app.fetch,
- *     async scheduled(event, env, ctx) { ... },
- *   }
- * )
- */
-declare function withCentry(config: CentryConfig, handler: WorkerHandler): WorkerHandler;
-
-export { CentryClient, type CentryConfig, CentryProvider, WorkerClient, captureException, captureWorkerException, getClient, getWorkerClient, init, initWorker, installGlobalHandlers, withCentry };
+export { CentryClient, type CentryConfig, CentryProvider, captureException, captureMessage, getClient, init, installGlobalHandlers };

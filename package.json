@@ -1,6 +1,6 @@
 {
   "name": "centry-client",
-  "version": "0.2.1",
+  "version": "1.0.0",
   "description": "Lightweight error tracking SDK for Centry",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -10,6 +10,16 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
+    },
+    "./worker": {
+      "types": "./dist/index.worker.d.ts",
+      "import": "./dist/index.worker.mjs",
+      "require": "./dist/index.worker.js"
+    },
+    "./node": {
+      "types": "./dist/index.node.d.ts",
+      "import": "./dist/index.node.mjs",
+      "require": "./dist/index.node.js"
     }
   },
   "files": [
@@ -28,6 +38,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260527.1",
+    "@types/node": "^22.0.0",
     "@types/react": "^19.2.15",
     "happy-dom": "^20.9.0",
     "oxlint": "^1.67.0",
@@ -42,8 +53,5 @@
     "type": "git",
     "url": "https://github.com/las6/centry-client.git"
   },
-  "license": "MIT",
-  "dependencies": {
-    "centry-client": "0.2.1"
-  }
+  "license": "MIT"
 }

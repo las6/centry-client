@@ -2,15 +2,7 @@ import { parseStack } from './stackParser'
 import type { CentryConfig } from './types'
 import { envelopeUrl } from './types'
 import { scrubUrl } from './utils'
-
-// ── Envelope builder ──────────────────────────────────────────────────────────
-
-function buildEnvelope(event: Record<string, unknown>): string {
-  const eventJson = JSON.stringify(event)
-  const header = JSON.stringify({ sent_at: new Date().toISOString() })
-  const itemHeader = JSON.stringify({ type: 'event', length: eventJson.length })
-  return `${header}\n${itemHeader}\n${eventJson}\n`
-}
+import { buildEnvelope } from './_shared/envelope'
 
 // ── UA parser ─────────────────────────────────────────────────────────────────
 
@@ -114,22 +106,8 @@ async function enrichFrames(frames: FrameRaw[]): Promise<FrameWithContext[]> {
   })
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function toError(value: unknown): Error | null {
-  if (value instanceof Error) return value
-  if (value === null || value === undefined) return null
-  const msg = typeof value === 'string'
-    ? value
-    : typeof value === 'object'
-      ? String((value as Record<string, unknown>).message || JSON.stringify(value))
-      : String(value)
-  const err = new Error(msg)
-  err.name = typeof value === 'object' && (value as Record<string, unknown>).name
-    ? String((value as Record<string, unknown>).name)
-    : 'UnknownError'
-  return err
-}
+import { toError } from './_shared/toError'
+import { RateLimiter } from './_shared/rateLimiter'
 
 // ── Dedup helpers ─────────────────────────────────────────────────────────────
 
@@ -140,28 +118,6 @@ function normalizeForDedup(url: string): string {
   // If path has a file extension, strip all query params (they're cache busters)
   // Otherwise keep them (extensionless paths may encode route params in query)
   return /\.[a-z0-9]{2,8}$/i.test(path) ? path : url
-}
-
-// ── Rate limiter ──────────────────────────────────────────────────────────────
-// Sliding window: tracks timestamps of recent sends and drops if over the cap.
-
-class RateLimiter {
-  private readonly max: number
-  private readonly windowMs: number
-  private timestamps: number[] = []
-
-  constructor(max: number, windowMs: number) {
-    this.max = max
-    this.windowMs = windowMs
-  }
-
-  allow(): boolean {
-    const now = Date.now()
-    this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs)
-    if (this.timestamps.length >= this.max) return false
-    this.timestamps.push(now)
-    return true
-  }
 }
 
 // ── Core client ───────────────────────────────────────────────────────────────
@@ -189,6 +145,17 @@ export class CentryClient {
   /** Internal: capture an unhandled exception (handled = false). Used by globalHandlers. */
   captureUnhandled(error: unknown): void {
     void this._capture(error, false)
+  }
+
+  /**
+   * Capture a plain message (non-exception). Level defaults to 'info'.
+   *
+   * @example
+   * import { captureMessage } from 'centry-client'
+   * captureMessage('Payment processed', 'info')
+   */
+  captureMessage(message: string, level: 'info' | 'warning' | 'error' = 'info'): void {
+    void this._captureMessage(message, level)
   }
 
   private async _capture(error: unknown, handled: boolean): Promise<void> {
@@ -257,6 +224,47 @@ export class CentryClient {
     }
   }
 
+  private async _captureMessage(message: string, level: string): Promise<void> {
+    try {
+      if (this.config.enabled === false) return
+      if (typeof window === 'undefined') return
+      if (!message) return
+
+      const dedupKey = `message:${level}:${message.slice(0, 150)}`
+      if (this.recentErrors.has(dedupKey)) return
+      this.recentErrors.add(dedupKey)
+      const dedupWindow = this.config.dedupWindowMs ?? 10_000
+      setTimeout(() => this.recentErrors.delete(dedupKey), dedupWindow)
+
+      if (!this.rateLimiter.allow()) return
+
+      const { browser, os } = parseUa()
+
+      const event: Record<string, unknown> = {
+        event_id: crypto.randomUUID().replace(/-/g, ''),
+        timestamp: new Date().toISOString(),
+        level,
+        environment: this.config.environment,
+        release: this.config.release,
+        message,
+        contexts: {
+          browser,
+          os,
+          page: {
+            url: scrubUrl(location.href),
+            'http.query': scrubUrl(location.search),
+            referer: scrubUrl(document.referrer),
+          },
+          runtime: { name: 'javascript' },
+        },
+      }
+
+      this.send(event)
+    } catch {
+      // Capturing must never throw
+    }
+  }
+
   private send(event: Record<string, unknown>): void {
     try {
       const envelope = buildEnvelope(event)
@@ -307,6 +315,21 @@ export function init(config: CentryConfig): CentryClient {
  */
 export function captureException(error: unknown): void {
   _client?.captureException(error)
+}
+
+/**
+ * Capture a plain message. Level defaults to 'info'.
+ * No-op if init() has not been called.
+ *
+ * @example
+ * import { captureMessage } from 'centry-client'
+ * captureMessage('Checkout completed', 'info')
+ */
+export function captureMessage(
+  message: string,
+  level: 'info' | 'warning' | 'error' = 'info',
+): void {
+  _client?.captureMessage(message, level)
 }
 
 /**

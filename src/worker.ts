@@ -1,86 +1,22 @@
 // ── Cloudflare Worker client ──────────────────────────────────────────────────
-// A stripped-down Centry client that works in CF Workers (and any non-browser
-// JS runtime). No DOM APIs — uses fetch() for delivery, which is available
-// globally in CF Workers.
+// Centry client for CF Workers. Extends BaseServerClient — only CF-specific
+// concerns live here: lazy AsyncLocalStorage init from globalThis, the CF
+// runtime context tag, and the withCentry() ExportedHandler wrapper.
 
-import { parseStack } from './stackParser'
 import type { CentryConfig } from './types'
-import { envelopeUrl } from './types'
-import { scrubUrl } from './utils'
+import { BaseServerClient } from './_shared/baseServerClient'
 
-// ── Envelope builder ──────────────────────────────────────────────────────────
+// ── AsyncLocalStorage (CF Workers) ───────────────────────────────────────────
+// CF Workers expose AsyncLocalStorage on globalThis. We resolve it lazily so
+// the module doesn't hard-fail in environments that lack it.
 
-function buildEnvelope(event: Record<string, unknown>): string {
-  const eventJson = JSON.stringify(event)
-  const header = JSON.stringify({ sent_at: new Date().toISOString() })
-  const itemHeader = JSON.stringify({ type: 'event', length: eventJson.length })
-  return `${header}\n${itemHeader}\n${eventJson}\n`
-}
+type ALS = { getStore(): unknown; run<T>(store: unknown, fn: () => T): T }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function toError(value: unknown): Error | null {
-  if (value instanceof Error) return value
-  if (value === null || value === undefined) return null
-  const msg =
-    typeof value === 'string'
-      ? value
-      : typeof value === 'object'
-        ? String((value as Record<string, unknown>).message || JSON.stringify(value))
-        : String(value)
-  const err = new Error(msg)
-  err.name =
-    typeof value === 'object' && (value as Record<string, unknown>).name
-      ? String((value as Record<string, unknown>).name)
-      : 'UnknownError'
-  return err
-}
-
-function buildRequestContext(request: Request): Record<string, unknown> {
-  const headers: Record<string, string> = {}
-  const SAFE_HEADERS = ['accept', 'content-type', 'user-agent', 'referer', 'cf-ray', 'cf-connecting-ip']
-  for (const key of SAFE_HEADERS) {
-    const val = request.headers.get(key)
-    if (val) headers[key] = val
-  }
-  return { method: request.method, url: scrubUrl(request.url), headers }
-}
-
-// ── Rate limiter ──────────────────────────────────────────────────────────────
-
-class RateLimiter {
-  private readonly max: number
-  private readonly windowMs: number
-  private timestamps: number[] = []
-
-  constructor(max: number, windowMs: number) {
-    this.max = max
-    this.windowMs = windowMs
-  }
-
-  allow(): boolean {
-    const now = Date.now()
-    this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs)
-    if (this.timestamps.length >= this.max) return false
-    this.timestamps.push(now)
-    return true
-  }
-}
-
-// ── Request context (AsyncLocalStorage) ──────────────────────────────────────
-// Stores the current request for the duration of a fetch handler invocation so
-// captureWorkerException() can attach it automatically without being passed it.
-
-type ALS = { getStore(): Request | undefined; run<T>(store: Request, fn: () => T): T }
-
-// AsyncLocalStorage is available in CF Workers (and Node 16+). We access it
-// lazily so the module doesn't hard-fail in environments that lack it.
 let _als: ALS | null | undefined = undefined // undefined = not yet resolved
 
 function getAls(): ALS | null {
   if (_als !== undefined) return _als
   try {
-    // CF Workers expose AsyncLocalStorage on globalThis
     const ALS = (globalThis as Record<string, unknown>)['AsyncLocalStorage'] as
       | (new () => ALS)
       | undefined
@@ -93,93 +29,31 @@ function getAls(): ALS | null {
 
 // ── WorkerClient ──────────────────────────────────────────────────────────────
 
-export class WorkerClient {
-  private config: CentryConfig
-  private url: string
-  private recentErrors = new Set<string>()
-  private rateLimiter: RateLimiter
-
+export class WorkerClient extends BaseServerClient {
   constructor(config: CentryConfig) {
-    this.config = config
-    this.url = envelopeUrl(config.project)
-    this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 60_000)
+    super(config)
+  }
+
+  protected getStore(): unknown {
+    return getAls()?.getStore()
+  }
+
+  protected get runtimeContext(): Record<string, unknown> {
+    return { name: 'cloudflare-worker' }
   }
 
   /**
-   * Capture a caught exception. Optionally pass the `Request` explicitly —
-   * if omitted and withCentry() is being used, the request is picked up
+   * Capture a caught exception. Optionally pass the Request explicitly —
+   * if omitted and withCentry() is in use, the request is picked up
    * automatically from AsyncLocalStorage context.
    */
-  captureException(error: unknown, request?: Request): void {
-    void this._capture(error, true, request ?? getAls()?.getStore())
+  override captureException(error: unknown, request?: Request): void {
+    super.captureException(error, request)
   }
 
   /** For use in unhandled rejection / uncaughtException hooks. */
-  captureUnhandled(error: unknown, request?: Request): void {
-    void this._capture(error, false, request ?? getAls()?.getStore())
-  }
-
-  private async _capture(error: unknown, handled: boolean, request?: Request): Promise<void> {
-    try {
-      if (this.config.enabled === false) return
-
-      const err = toError(error)
-      if (!err) return
-
-      // Dedup
-      const dedupKey = `${err.name}:${err.message}:${err.stack?.slice(0, 150) ?? ''}`
-      if (this.recentErrors.has(dedupKey)) return
-      this.recentErrors.add(dedupKey)
-      const dedupWindow = this.config.dedupWindowMs ?? 10_000
-      setTimeout(() => this.recentErrors.delete(dedupKey), dedupWindow)
-
-      // Rate limit
-      if (!this.rateLimiter.allow()) return
-
-      const frames = err.stack ? parseStack(err.stack) : []
-
-      const event: Record<string, unknown> = {
-        event_id: crypto.randomUUID().replace(/-/g, ''),
-        timestamp: new Date().toISOString(),
-        level: 'error',
-        environment: this.config.environment,
-        release: this.config.release,
-        exception: {
-          values: [
-            {
-              type: err.name || 'Error',
-              value: err.message,
-              mechanism: { type: handled ? 'generic' : 'onerror', handled },
-              stacktrace: { frames },
-            },
-          ],
-        },
-        contexts: {
-          runtime: { name: 'cloudflare-worker' },
-        },
-      }
-
-      if (request) {
-        event['request'] = buildRequestContext(request)
-      }
-
-      await this._send(event)
-    } catch {
-      // Capturing must never throw
-    }
-  }
-
-  private async _send(event: Record<string, unknown>): Promise<void> {
-    try {
-      const envelope = buildEnvelope(event)
-      await fetch(this.url, {
-        method: 'POST',
-        body: envelope,
-        headers: { 'Content-Type': 'text/plain' },
-      })
-    } catch {
-      // send must never throw
-    }
+  override captureUnhandled(error: unknown, request?: Request): void {
+    super.captureUnhandled(error, request)
   }
 }
 
@@ -193,7 +67,7 @@ let _workerClient: WorkerClient | null = null
  * automatic request context and unhandled error capture.
  *
  * @example
- * import { initWorker } from 'centry-client'
+ * import { initWorker } from 'centry-client/worker'
  * initWorker({ project: 'my-project', environment: 'production' })
  */
 export function initWorker(config: CentryConfig): WorkerClient {
@@ -209,6 +83,17 @@ export function initWorker(config: CentryConfig): WorkerClient {
  */
 export function captureWorkerException(error: unknown, request?: Request): void {
   _workerClient?.captureException(error, request)
+}
+
+/**
+ * Capture a plain message from a Cloudflare Worker.
+ * No-op if neither initWorker() nor withCentry() has been called.
+ */
+export function captureWorkerMessage(
+  message: string,
+  level: 'info' | 'warning' | 'error' = 'info',
+): void {
+  _workerClient?.captureMessage(message, level)
 }
 
 /**
@@ -228,8 +113,11 @@ type WorkerHandler = ExportedHandler<Record<string, unknown>>
  * duration of each fetch invocation (so captureWorkerException picks it up
  * automatically), and catches any unhandled exceptions that bubble up.
  *
+ * Pass client.flush() to ctx.waitUntil() if you want in-flight events to
+ * finish sending even after the response is returned.
+ *
  * @example
- * import { withCentry } from 'centry-client'
+ * import { withCentry } from 'centry-client/worker'
  *
  * export default withCentry(
  *   { project: 'my-project', environment: 'production' },
@@ -250,9 +138,13 @@ export function withCentry(config: CentryConfig, handler: WorkerHandler): Worker
     wrapped.fetch = async (request: Request, env: unknown, ctx: ExecutionContext) => {
       const run = () =>
         Promise.resolve(
-          (originalFetch as (req: Request, env: unknown, ctx: ExecutionContext) => Response | Promise<Response>)(
-            request, env, ctx,
-          ),
+          (
+            originalFetch as (
+              req: Request,
+              env: unknown,
+              ctx: ExecutionContext,
+            ) => Response | Promise<Response>
+          )(request, env, ctx),
         ).catch((err: unknown) => {
           client.captureUnhandled(err, request)
           throw err
@@ -264,11 +156,19 @@ export function withCentry(config: CentryConfig, handler: WorkerHandler): Worker
 
   if (handler.scheduled) {
     const originalScheduled = handler.scheduled
-    wrapped.scheduled = async (event: ScheduledController, env: unknown, ctx: ExecutionContext) => {
+    wrapped.scheduled = async (
+      event: ScheduledController,
+      env: unknown,
+      ctx: ExecutionContext,
+    ) => {
       try {
-        await (originalScheduled as (e: ScheduledController, env: unknown, ctx: ExecutionContext) => Promise<void>)(
-          event, env, ctx,
-        )
+        await (
+          originalScheduled as (
+            e: ScheduledController,
+            env: unknown,
+            ctx: ExecutionContext,
+          ) => Promise<void>
+        )(event, env, ctx)
       } catch (err) {
         client.captureUnhandled(err)
         throw err

@@ -1,6 +1,6 @@
 # centry-client
 
-Lightweight error tracking SDK for [Centry](https://github.com/las6/centry). Supports browser apps and Cloudflare Workers.
+Lightweight error tracking SDK for [Centry](https://github.com/las6/centry). Supports browser apps, Cloudflare Workers, and Node.js (Vercel, Next.js App Router, AWS Lambda).
 
 ## Install
 
@@ -67,12 +67,14 @@ client.captureException(error)
 
 ## Cloudflare Workers
 
+Import from the `centry-client/worker` subpath.
+
 ### `withCentry()` — recommended
 
 Wrap your worker export with `withCentry()` for automatic request context and unhandled error capture. No explicit `initWorker()` call needed — the wrapper initialises the client for you.
 
 ```ts
-import { withCentry, captureWorkerException } from 'centry-client'
+import { withCentry, captureWorkerException } from 'centry-client/worker'
 
 export default withCentry(
   { project: 'my-project', environment: 'production' },
@@ -97,7 +99,7 @@ app.onError((err, c) => {
 If you're running Centry alongside another wrapper (e.g. `withSentry()`), use `initWorker()` directly instead. Pass the `Request` explicitly where you have it:
 
 ```ts
-import { initWorker, captureWorkerException } from 'centry-client'
+import { initWorker, captureWorkerException } from 'centry-client/worker'
 
 initWorker({ project: 'my-project', environment: 'production' })
 
@@ -106,13 +108,58 @@ app.onError((err, c) => {
   return c.json({ error: 'Internal server error' }, 500)
 })
 ```
+
+---
+
+## Node.js / Serverless
+
+Import from the `centry-client/node` subpath. Uses `AsyncLocalStorage` from `node:async_hooks` (Node 16.4+). Works with Vercel, Next.js App Router, AWS Lambda, and long-running servers.
+
+### `withCentry()` — recommended for serverless
+
+Wraps any async handler. Stores the request in `AsyncLocalStorage` so `captureException()` attaches it automatically, and calls `flush()` before returning — critical for short-lived functions.
+
+```ts
+// Vercel old-style Node.js (IncomingMessage / ServerResponse)
+import { withCentry } from 'centry-client/node'
+
+export default withCentry({ project: 'my-project' }, async (req, res) => {
+  // ...
+})
+```
+
+```ts
+// Next.js App Router route handler
+import { withCentry } from 'centry-client/node'
+
+export const GET = withCentry({ project: 'my-project' }, async (request: Request) => {
+  return Response.json({ ... })
+})
+```
+
+For errors caught in try/catch, call `captureException()` directly — the current request is attached automatically:
+
+```ts
+import { captureException } from 'centry-client/node'
+
+captureException(error)
+```
+
+### `initNode()` — long-running servers
+
+For always-on Node.js processes (Express, Fastify, etc.), call `initNode()` once at startup. It installs global `uncaughtException` and `unhandledRejection` handlers automatically.
+
+```ts
+import { initNode, captureException } from 'centry-client/node'
+
+initNode({ project: 'my-project', environment: 'production' })
 ```
 
 ---
 
 ## Configuration
 
-All options apply to both `init()` (browser) and `initWorker()` (CF Worker).
+All options apply to all three targets (`init()`, `initWorker()`, `initNode()`, and `withCentry()`).
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
