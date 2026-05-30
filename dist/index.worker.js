@@ -222,7 +222,7 @@ var BaseServerClient = class {
    */
   async flush(timeoutMs = 2e3) {
     await Promise.race([
-      Promise.allSettled([...this._pending]),
+      Promise.allSettled(this._pending),
       new Promise((resolve) => setTimeout(resolve, timeoutMs))
     ]);
   }
