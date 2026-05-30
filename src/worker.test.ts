@@ -257,11 +257,16 @@ describe('module-level singleton', () => {
 })
 
 describe('withCentry', () => {
+  let waitUntilSpy: ReturnType<typeof vi.fn>
+  let mockCtx: ExecutionContext
+
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })))
     vi.stubGlobal('crypto', { randomUUID: () => 'xxx' })
     vi.useFakeTimers()
     vi.setSystemTime(new Date(0))
+    waitUntilSpy = vi.fn()
+    mockCtx = { waitUntil: waitUntilSpy, passThroughOnException: vi.fn() } as unknown as ExecutionContext
   })
 
   afterEach(() => {
@@ -279,8 +284,33 @@ describe('withCentry', () => {
     expect(wrapped.fetch).toBeInstanceOf(Function)
 
     const req = new Request('https://example.com/test')
-    const response = await wrapped.fetch!(req, {}, {} as ExecutionContext)
+    const response = await wrapped.fetch!(req, {}, mockCtx)
     expect(response.status).toBe(200)
+  })
+
+  it('calls ctx.waitUntil(client.flush()) on successful fetch', async () => {
+    const wrapped = withCentry({ project: 'my-app' }, {
+      fetch: async () => new Response('OK'),
+    })
+
+    const req = new Request('https://example.com/test')
+    await wrapped.fetch!(req, {}, mockCtx)
+
+    expect(waitUntilSpy).toHaveBeenCalledOnce()
+    // The argument must be a Promise (the flush promise)
+    expect(waitUntilSpy.mock.calls[0][0]).toBeInstanceOf(Promise)
+  })
+
+  it('calls ctx.waitUntil(client.flush()) even when fetch handler throws', async () => {
+    const wrapped = withCentry({ project: 'my-app' }, {
+      fetch: async () => { throw new Error('handler error') },
+    })
+
+    const req = new Request('https://example.com/test')
+    await expect(wrapped.fetch!(req, {}, mockCtx)).rejects.toThrow('handler error')
+
+    expect(waitUntilSpy).toHaveBeenCalledOnce()
+    expect(waitUntilSpy.mock.calls[0][0]).toBeInstanceOf(Promise)
   })
 
   it('captures errors from fetch handler', async () => {
@@ -291,11 +321,10 @@ describe('withCentry', () => {
     const wrapped = withCentry({ project: 'my-app' }, handler)
     const req = new Request('https://example.com/test')
 
-    await expect(wrapped.fetch!(req, {}, {} as ExecutionContext)).rejects.toThrow('handler error')
+    await expect(wrapped.fetch!(req, {}, mockCtx)).rejects.toThrow('handler error')
 
     vi.runAllTimers()
     const calls = fetchCalls()
-    // The error should have been captured (the second call after the test one, excluding init calls)
     const errorCalls = calls.filter(c => c.url.includes('/api/my-app/envelope/'))
     expect(errorCalls.length).toBe(1)
   })
@@ -307,5 +336,28 @@ describe('withCentry', () => {
     const wrapped = withCentry({ project: 'my-app' }, handler)
     expect(wrapped).toHaveProperty('scheduled')
     expect(wrapped.scheduled).toBeInstanceOf(Function)
+  })
+
+  it('calls ctx.waitUntil(client.flush()) after scheduled handler', async () => {
+    const wrapped = withCentry({ project: 'my-app' }, {
+      scheduled: async () => {},
+    })
+
+    await wrapped.scheduled!({} as ScheduledController, {}, mockCtx)
+
+    expect(waitUntilSpy).toHaveBeenCalledOnce()
+    expect(waitUntilSpy.mock.calls[0][0]).toBeInstanceOf(Promise)
+  })
+
+  it('calls ctx.waitUntil(client.flush()) even when scheduled handler throws', async () => {
+    const wrapped = withCentry({ project: 'my-app' }, {
+      scheduled: async () => { throw new Error('cron failure') },
+    })
+
+    await expect(
+      wrapped.scheduled!({} as ScheduledController, {}, mockCtx)
+    ).rejects.toThrow('cron failure')
+
+    expect(waitUntilSpy).toHaveBeenCalledOnce()
   })
 })

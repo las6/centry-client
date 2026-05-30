@@ -111,10 +111,9 @@ type WorkerHandler = ExportedHandler<Record<string, unknown>>
  * Wraps a Cloudflare Worker export with Centry instrumentation. Initialises
  * the client, stores the incoming Request in AsyncLocalStorage for the
  * duration of each fetch invocation (so captureWorkerException picks it up
- * automatically), and catches any unhandled exceptions that bubble up.
- *
- * Pass client.flush() to ctx.waitUntil() if you want in-flight events to
- * finish sending even after the response is returned.
+ * automatically), catches any unhandled exceptions that bubble up, and
+ * registers ctx.waitUntil(client.flush()) so in-flight events always finish
+ * sending after the response is returned.
  *
  * @example
  * import { withCentry } from 'centry-client/worker'
@@ -150,7 +149,9 @@ export function withCentry(config: CentryConfig, handler: WorkerHandler): Worker
           throw err
         })
 
-      return als ? als.run(request, run) : run()
+      const responsePromise = als ? als.run(request, run) : run()
+      ctx.waitUntil(responsePromise.then(() => client.flush(), () => client.flush()))
+      return responsePromise
     }
   }
 
@@ -172,6 +173,8 @@ export function withCentry(config: CentryConfig, handler: WorkerHandler): Worker
       } catch (err) {
         client.captureUnhandled(err)
         throw err
+      } finally {
+        ctx.waitUntil(client.flush())
       }
     }
   }
