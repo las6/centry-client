@@ -60,7 +60,7 @@ export abstract class BaseServerClient {
    */
   async flush(timeoutMs = 2000): Promise<void> {
     await Promise.race([
-      Promise.allSettled([...this._pending]),
+      Promise.allSettled(this._pending),
       new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
     ])
   }

@@ -339,7 +339,9 @@ function withCentry(config, handler) {
         client.captureUnhandled(err, request);
         throw err;
       });
-      return als ? als.run(request, run) : run();
+      const responsePromise = als ? als.run(request, run) : run();
+      ctx.waitUntil(responsePromise.then(() => client.flush(), () => client.flush()));
+      return responsePromise;
     };
   }
   if (handler.scheduled) {
@@ -350,6 +352,8 @@ function withCentry(config, handler) {
       } catch (err) {
         client.captureUnhandled(err);
         throw err;
+      } finally {
+        ctx.waitUntil(client.flush());
       }
     };
   }

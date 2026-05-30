@@ -13,11 +13,6 @@ function parsedEvent(body: string): Record<string, unknown> {
 }
 
 // Reset singleton between tests by re-importing via initNode
-function resetSingleton() {
-  // initNode re-initialises and re-attaches handlers
-  // We call it with a fresh config to reset state; tests that need a blank
-  // slate call it themselves.
-}
 
 describe('NodeClient', () => {
   let client: NodeClient
@@ -258,7 +253,7 @@ describe('NodeClient', () => {
       ))
       const slowClient = new NodeClient({ project: 'p' })
       slowClient.captureException(new Error('slow'))
-      const start = Date.now()
+      const _start = Date.now()
       const flushPromise = slowClient.flush(100)
       vi.advanceTimersByTime(200)
       await flushPromise
@@ -421,7 +416,7 @@ describe('withCentry (Node)', () => {
   it('attaches Web Request context via ALS', async () => {
     const req = new Request('https://api.example.com/data', { method: 'GET' })
 
-    const wrapped = withCentry({ project: 'p' }, async (request: Request) => {
+    const wrapped = withCentry({ project: 'p' }, async (_request: Request) => {
       // captureException inside handler — should pick up request from ALS
       getNodeClient()?.captureException(new Error('inside handler'))
       return new Response('ok')
@@ -448,7 +443,7 @@ describe('withCentry (Node)', () => {
     }
     const res = { end: vi.fn() }
 
-    const wrapped = withCentry({ project: 'p' }, async (request: unknown, response: unknown) => {
+    const wrapped = withCentry({ project: 'p' }, async (_request: unknown, _response: unknown) => {
       getNodeClient()?.captureException(new Error('node handler error'))
     })
 
