@@ -15,13 +15,29 @@ export function scrubUrl(urlStr: string | undefined | null): string {
       'secret', 'session', 'sid', 'authorization', 'credential'
     ]
 
-    // We iterate over keys and check if any match our sensitive list
-    // searchParams.keys() can contain duplicates, but that's fine for our check
+    // Redact sensitive keys in search params
     for (const key of Array.from(url.searchParams.keys())) {
       const lowerKey = key.toLowerCase()
       if (sensitiveKeys.some(sk => lowerKey.includes(sk))) {
         url.searchParams.set(key, '[filtered]')
         hasSensitive = true
+      }
+    }
+
+    // Redact sensitive keys in hash (fragment) if it looks like a query string
+    if (url.hash.length > 1) {
+      const hashParams = new URLSearchParams(url.hash.substring(1))
+      let hashModified = false
+      for (const key of Array.from(hashParams.keys())) {
+        const lowerKey = key.toLowerCase()
+        if (sensitiveKeys.some(sk => lowerKey.includes(sk))) {
+          hashParams.set(key, '[filtered]')
+          hashModified = true
+          hasSensitive = true
+        }
+      }
+      if (hashModified) {
+        url.hash = hashParams.toString()
       }
     }
 
