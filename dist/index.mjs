@@ -124,6 +124,91 @@ var RateLimiter = class {
   }
 };
 
+// src/integrations/globalHandlers.ts
+var GLOBAL_HANDLERS_STATE = /* @__PURE__ */ Symbol.for("centry.globalHandlers");
+function getState() {
+  if (typeof window === "undefined") {
+    return {
+      initClient: null,
+      installed: false,
+      manualInstallId: 0,
+      manualClients: /* @__PURE__ */ new Map(),
+      seen: /* @__PURE__ */ new WeakSet()
+    };
+  }
+  const globalWindow = window;
+  globalWindow[GLOBAL_HANDLERS_STATE] ?? (globalWindow[GLOBAL_HANDLERS_STATE] = {
+    initClient: null,
+    installed: false,
+    manualInstallId: 0,
+    manualClients: /* @__PURE__ */ new Map(),
+    seen: /* @__PURE__ */ new WeakSet()
+  });
+  return globalWindow[GLOBAL_HANDLERS_STATE];
+}
+function getActiveClient() {
+  const state = getState();
+  let latestManualClient = null;
+  for (const client of state.manualClients.values()) latestManualClient = client;
+  return latestManualClient ?? state.initClient;
+}
+function onError(event) {
+  const error = event.error;
+  const state = getState();
+  if (error instanceof Error && !state.seen.has(error)) {
+    state.seen.add(error);
+    getActiveClient()?.captureUnhandled(error);
+  }
+}
+function onUnhandledRejection(event) {
+  const error = event.reason;
+  const state = getState();
+  if (error instanceof Error && !state.seen.has(error)) {
+    state.seen.add(error);
+    getActiveClient()?.captureUnhandled(error);
+    return;
+  }
+  if (typeof error === "string") {
+    getActiveClient()?.captureUnhandled(new Error(error));
+  }
+}
+function ensureInstalled() {
+  const state = getState();
+  if (typeof window === "undefined" || state.installed) return;
+  window.addEventListener("error", onError);
+  window.addEventListener("unhandledrejection", onUnhandledRejection);
+  state.installed = true;
+}
+function maybeUninstall() {
+  const state = getState();
+  if (typeof window === "undefined") return;
+  if (state.initClient || state.manualClients.size > 0 || !state.installed) return;
+  window.removeEventListener("error", onError);
+  window.removeEventListener("unhandledrejection", onUnhandledRejection);
+  state.installed = false;
+}
+function syncGlobalHandlers(client) {
+  const state = getState();
+  state.initClient = client;
+  if (client) {
+    ensureInstalled();
+    return;
+  }
+  maybeUninstall();
+}
+function installGlobalHandlers(client) {
+  if (typeof window === "undefined") return () => {
+  };
+  const state = getState();
+  const installId = ++state.manualInstallId;
+  state.manualClients.set(installId, client);
+  ensureInstalled();
+  return () => {
+    state.manualClients.delete(installId);
+    maybeUninstall();
+  };
+}
+
 // src/core.ts
 function parseUa() {
   const ua = navigator.userAgent;
@@ -349,6 +434,7 @@ var CentryClient = class {
 var _client = null;
 function init(config) {
   _client = new CentryClient(config);
+  syncGlobalHandlers(config.globalHandlers === false ? null : _client);
   return _client;
 }
 function captureException(error) {
@@ -361,41 +447,10 @@ function getClient() {
   return _client;
 }
 
-// src/integrations/globalHandlers.ts
-function installGlobalHandlers(client) {
-  if (typeof window === "undefined") return () => {
-  };
-  const seen = /* @__PURE__ */ new WeakSet();
-  const onError = (_message, _source, _lineno, _colno, error) => {
-    if (error && !seen.has(error)) {
-      seen.add(error);
-      client.captureUnhandled(error);
-    }
-    return false;
-  };
-  const onUnhandledRejection = (event) => {
-    const error = event.reason;
-    if (error instanceof Error && !seen.has(error)) {
-      seen.add(error);
-      client.captureUnhandled(error);
-    } else if (typeof error === "string") {
-      client.captureUnhandled(new Error(error));
-    }
-  };
-  window.addEventListener("error", (e) => onError(e.message, e.filename, e.lineno, e.colno, e.error));
-  window.addEventListener("unhandledrejection", onUnhandledRejection);
-  return () => {
-    window.removeEventListener("error", onError);
-    window.removeEventListener("unhandledrejection", onUnhandledRejection);
-  };
-}
-
 // src/CentryProvider.tsx
 function CentryProvider({ children, ...config }) {
   useEffect(() => {
-    const client = init(config);
-    const cleanup = installGlobalHandlers(client);
-    return cleanup;
+    init(config);
   }, [config.project]);
   return children;
 }

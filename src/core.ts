@@ -108,6 +108,7 @@ async function enrichFrames(frames: FrameRaw[]): Promise<FrameWithContext[]> {
 
 import { toError } from './_shared/toError'
 import { RateLimiter } from './_shared/rateLimiter'
+import { syncGlobalHandlers } from './integrations/globalHandlers'
 
 // ── Dedup helpers ─────────────────────────────────────────────────────────────
 
@@ -294,15 +295,20 @@ let _client: CentryClient | null = null
 
 /**
  * Initialize Centry. Call once at application startup, before React mounts.
+ * In the browser, this also installs global error handlers by default.
  * Subsequent calls replace the active client (useful for hot-reload in dev).
  *
  * @example
  * // client.tsx / main.tsx
  * import { init } from 'centry-client'
  * init({ project: 'my-project' })
+ *
+ * // Opt out of automatic window error handlers:
+ * init({ project: 'my-project', globalHandlers: false })
  */
 export function init(config: CentryConfig): CentryClient {
   _client = new CentryClient(config)
+  syncGlobalHandlers(config.globalHandlers === false ? null : _client)
   return _client
 }
 
@@ -338,4 +344,10 @@ export function captureMessage(
  */
 export function getClient(): CentryClient | null {
   return _client
+}
+
+/** Internal test helper. Not part of the public SDK contract. */
+export function resetClientForTests(): void {
+  _client = null
+  syncGlobalHandlers(null)
 }

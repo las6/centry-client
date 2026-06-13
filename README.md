@@ -30,9 +30,18 @@ init({
 })
 ```
 
+To opt out of automatic browser handlers, pass `globalHandlers: false`:
+
+```ts
+init({
+  project: 'my-project',
+  globalHandlers: false,
+})
+```
+
 ### React provider (optional)
 
-If you prefer a React component, `CentryProvider` wraps `init()` and installs global handlers on mount:
+If you prefer a React component, `CentryProvider` wraps `init()` on mount. Browser global handlers still come from `init()` itself:
 
 ```tsx
 import { CentryProvider } from 'centry-client'
@@ -159,7 +168,7 @@ initNode({ project: 'my-project', environment: 'production' })
 
 ## Configuration
 
-All options apply to all three targets (`init()`, `initWorker()`, `initNode()`, and `withCentry()`).
+Most options apply to all three targets (`init()`, `initWorker()`, `initNode()`, and `withCentry()`). `globalHandlers` is browser-only and only affects `init()` / `CentryProvider`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -167,6 +176,7 @@ All options apply to all three targets (`init()`, `initWorker()`, `initNode()`, 
 | `environment` | `string` | `undefined` | e.g. `production`, `staging` |
 | `release` | `string` | `undefined` | App version or commit hash |
 | `enabled` | `boolean` | `true` | Set to `false` to disable reporting |
+| `globalHandlers` | `boolean` | `true` in browser `init()` | Auto-install `window` error and unhandled rejection handlers (browser `init()` only) |
 | `allowUrls` | `RegExp[]` | — | Only mark frames matching these URLs as in-app (browser only) |
 | `maxEventsPerMinute` | `number` | `10` | Hard cap on errors sent per 60-second window |
 | `dedupWindowMs` | `number` | `10000` | Suppress duplicate errors for this duration (ms) |

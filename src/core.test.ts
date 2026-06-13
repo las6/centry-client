@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { CentryClient, init, captureException, getClient } from './core'
+import { CentryClient, init, captureException, getClient, resetClientForTests } from './core'
+import { installGlobalHandlers } from './integrations/globalHandlers'
 
 async function drain() {
   await new Promise((r) => setTimeout(r, 10))
@@ -213,7 +214,10 @@ describe('CentryClient', () => {
 
 describe('module-level singleton', () => {
   beforeEach(() => setupMocks())
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    resetClientForTests()
+    vi.restoreAllMocks()
+  })
 
   it('getClient returns null before init', () => {
     expect(getClient()).toBeNull()
@@ -235,5 +239,87 @@ describe('module-level singleton', () => {
     captureException(new Error('test'))
     await drain()
     expect(vi.mocked(navigator.sendBeacon).mock.calls).toHaveLength(1)
+  })
+
+  it('installs browser global handlers by default', async () => {
+    init({ project: 'browser-app' })
+
+    window.dispatchEvent(new ErrorEvent('error', { error: new Error('global crash'), message: 'global crash' }))
+    await drain()
+
+    expect(vi.mocked(navigator.sendBeacon).mock.calls).toHaveLength(1)
+    const event = await parseEvent(0)
+    expect(event.exception.values[0].mechanism).toEqual({ type: 'onerror', handled: false })
+  })
+
+  it('supports opting out of automatic browser global handlers', async () => {
+    init({ project: 'browser-app', globalHandlers: false })
+
+    window.dispatchEvent(new ErrorEvent('error', { error: new Error('ignored crash'), message: 'ignored crash' }))
+    await drain()
+
+    expect(vi.mocked(navigator.sendBeacon).mock.calls).toHaveLength(0)
+  })
+
+  it('reuses one listener installation across repeated init calls', async () => {
+    const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
+
+    init({ project: 'first-app' })
+    init({ project: 'second-app' })
+
+    expect(addEventListenerSpy.mock.calls.filter(([type]) => type === 'error')).toHaveLength(1)
+    expect(addEventListenerSpy.mock.calls.filter(([type]) => type === 'unhandledrejection')).toHaveLength(1)
+
+    window.dispatchEvent(new ErrorEvent('error', { error: new Error('reinit crash'), message: 'reinit crash' }))
+    await drain()
+
+    const calls = await getCalls()
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toContain('/api/second-app/envelope/')
+  })
+
+  it('reuses one listener installation across module reloads', async () => {
+    const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
+
+    const firstCore = await import('./core')
+    firstCore.init({ project: 'first-app' })
+
+    vi.resetModules()
+
+    const secondCore = await import('./core')
+    secondCore.init({ project: 'second-app' })
+
+    expect(addEventListenerSpy.mock.calls.filter(([type]) => type === 'error')).toHaveLength(1)
+    expect(addEventListenerSpy.mock.calls.filter(([type]) => type === 'unhandledrejection')).toHaveLength(1)
+
+    window.dispatchEvent(new ErrorEvent('error', { error: new Error('hmr crash'), message: 'hmr crash' }))
+    await drain()
+
+    const calls = await getCalls()
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toContain('/api/second-app/envelope/')
+
+    secondCore.resetClientForTests()
+  })
+
+  it('cleans up manual handlers correctly and supports re-install', async () => {
+    const cleanup = installGlobalHandlers(new CentryClient({ project: 'manual-app' }))
+
+    window.dispatchEvent(new ErrorEvent('error', { error: new Error('manual crash'), message: 'manual crash' }))
+    await drain()
+
+    cleanup()
+
+    window.dispatchEvent(new ErrorEvent('error', { error: new Error('after cleanup'), message: 'after cleanup' }))
+    await drain()
+
+    init({ project: 'reinit-app' })
+    window.dispatchEvent(new ErrorEvent('error', { error: new Error('after reinit'), message: 'after reinit' }))
+    await drain()
+
+    const calls = await getCalls()
+    expect(calls).toHaveLength(2)
+    expect(calls[0].url).toContain('/api/manual-app/envelope/')
+    expect(calls[1].url).toContain('/api/reinit-app/envelope/')
   })
 })

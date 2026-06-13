@@ -6,6 +6,8 @@ interface CentryConfig {
     release?: string;
     allowUrls?: RegExp[];
     enabled?: boolean;
+    /** Browser only. Defaults to true in init(); set false to skip window-level handlers. */
+    globalHandlers?: boolean;
     /** Max errors sent per 60-second window. Defaults to 10. */
     maxEventsPerMinute?: number;
     /** How long (ms) to suppress duplicate errors. Defaults to 10000 (10s). */
@@ -16,9 +18,10 @@ interface CentryProviderProps extends CentryConfig {
     children: ReactNode;
 }
 /**
- * Optional React convenience wrapper. Calls init() on mount and installs
- * global error handlers. Prefer calling init() directly in your client entry
- * file if you don't need React context or are using SSR.
+ * Optional React convenience wrapper. Calls init() on mount.
+ * Browser global error handlers are installed by init() by default.
+ * Prefer calling init() directly in your client entry file if you don't need
+ * React lifecycle wiring or are using SSR.
  *
  * @example
  * // Using init() directly (recommended):
@@ -56,12 +59,16 @@ declare class CentryClient {
 }
 /**
  * Initialize Centry. Call once at application startup, before React mounts.
+ * In the browser, this also installs global error handlers by default.
  * Subsequent calls replace the active client (useful for hot-reload in dev).
  *
  * @example
  * // client.tsx / main.tsx
  * import { init } from 'centry-client'
  * init({ project: 'my-project' })
+ *
+ * // Opt out of automatic window error handlers:
+ * init({ project: 'my-project', globalHandlers: false })
  */
 declare function init(config: CentryConfig): CentryClient;
 /**

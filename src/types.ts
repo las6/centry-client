@@ -8,6 +8,8 @@ export interface CentryConfig {
   release?: string
   allowUrls?: RegExp[]
   enabled?: boolean
+  /** Browser only. Defaults to true in init(); set false to skip window-level handlers. */
+  globalHandlers?: boolean
   /** Max errors sent per 60-second window. Defaults to 10. */
   maxEventsPerMinute?: number
   /** How long (ms) to suppress duplicate errors. Defaults to 10000 (10s). */

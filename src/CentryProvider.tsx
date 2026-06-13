@@ -1,6 +1,5 @@
 import { useEffect, type ReactNode } from 'react'
 import { init } from './core'
-import { installGlobalHandlers } from './integrations/globalHandlers'
 import type { CentryConfig } from './types'
 
 interface CentryProviderProps extends CentryConfig {
@@ -8,9 +7,10 @@ interface CentryProviderProps extends CentryConfig {
 }
 
 /**
- * Optional React convenience wrapper. Calls init() on mount and installs
- * global error handlers. Prefer calling init() directly in your client entry
- * file if you don't need React context or are using SSR.
+ * Optional React convenience wrapper. Calls init() on mount.
+ * Browser global error handlers are installed by init() by default.
+ * Prefer calling init() directly in your client entry file if you don't need
+ * React lifecycle wiring or are using SSR.
  *
  * @example
  * // Using init() directly (recommended):
@@ -24,11 +24,9 @@ interface CentryProviderProps extends CentryConfig {
  */
 export function CentryProvider({ children, ...config }: CentryProviderProps) {
   useEffect(() => {
-    const client = init(config)
-    const cleanup = installGlobalHandlers(client)
-    return cleanup
-  // Only re-init if projectId changes — other config changes are ignored at runtime
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    init(config)
+   // Only re-init if projectId changes — other config changes are ignored at runtime
+   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.project])
 
   return children as React.ReactElement
