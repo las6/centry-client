@@ -26,7 +26,8 @@ export function buildRequestContext(req: unknown): Record<string, unknown> | nul
     const request = req as Request
     const headers: Record<string, string> = {}
     for (const key of SAFE_HEADERS) {
-      const val = request.headers.get(key)
+      let val = request.headers.get(key)
+      if (key === 'referer' && val) val = scrubUrl(val)
       if (val) headers[key] = val
     }
     return { method: request.method, url: scrubUrl(request.url), headers }
@@ -42,7 +43,8 @@ export function buildRequestContext(req: unknown): Record<string, unknown> | nul
   if (r.headers && typeof r.headers === 'object') {
     const headers: Record<string, string> = {}
     for (const key of SAFE_HEADERS) {
-      const val = r.headers[key]
+      let val = r.headers[key]
+      if (key === 'referer' && typeof val === 'string') val = scrubUrl(val)
       if (typeof val === 'string') headers[key] = val
     }
     // IncomingMessage.url is path-only (e.g. "/api/foo?bar=1"), not a full URL

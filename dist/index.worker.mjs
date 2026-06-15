@@ -139,7 +139,8 @@ function buildRequestContext(req) {
     const request = req;
     const headers = {};
     for (const key of SAFE_HEADERS) {
-      const val = request.headers.get(key);
+      let val = request.headers.get(key);
+      if (key === "referer" && val) val = scrubUrl(val);
       if (val) headers[key] = val;
     }
     return { method: request.method, url: scrubUrl(request.url), headers };
@@ -148,7 +149,8 @@ function buildRequestContext(req) {
   if (r.headers && typeof r.headers === "object") {
     const headers = {};
     for (const key of SAFE_HEADERS) {
-      const val = r.headers[key];
+      let val = r.headers[key];
+      if (key === "referer" && typeof val === "string") val = scrubUrl(val);
       if (typeof val === "string") headers[key] = val;
     }
     return {

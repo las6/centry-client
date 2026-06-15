@@ -1,0 +1,1 @@
+Keep URL scrubbing narrowly scoped. Redact sensitive query parameters with `scrubUrl`, and scrub the `referer` header through the same helper before capture. Do not propose broad fragment/hash scrubbing unless the fragment is explicitly parsed as query-style auth data; plain SPA/hash routes are useful debugging context and should be preserved.

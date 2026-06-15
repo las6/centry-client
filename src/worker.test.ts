@@ -152,6 +152,22 @@ describe('WorkerClient', () => {
       const event = JSON.parse(fetchCalls()[0].body.split('\n')[2])
       expect(event.request.url).toBe('https://api.example.com/v1/user?token=%5Bfiltered%5D&api_key=%5Bfiltered%5D')
     })
+
+    it('keeps referer but scrubs sensitive query parameters from it', async () => {
+      const req = {
+        method: 'GET',
+        url: '/v1/user',
+        headers: {
+          'referer': 'https://dashboard.example.com/reset?token=secret&tab=security',
+        },
+      }
+      client.captureException(new Error('test'), req)
+      await vi.runAllTimersAsync()
+
+      const event = JSON.parse(fetchCalls()[0].body.split('\n')[2])
+      const headers = (event.request as Record<string, unknown>).headers as Record<string, string>
+      expect(headers['referer']).toBe('https://dashboard.example.com/reset?token=%5Bfiltered%5D&tab=security')
+    })
   })
 
   describe('dedup', () => {
