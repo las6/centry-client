@@ -25,26 +25,6 @@ export function scrubUrl(urlStr: string | undefined | null): string {
       }
     }
 
-    if (url.hash) {
-      const isHashSearch = url.hash.startsWith('#?')
-      const hashContent = url.hash.slice(isHashSearch ? 2 : 1)
-      const hashParams = new URLSearchParams(hashContent)
-      let hashModified = false
-
-      for (const key of Array.from(hashParams.keys())) {
-        const lowerKey = key.toLowerCase()
-        if (sensitiveKeys.some((sk) => lowerKey.includes(sk))) {
-          hashParams.set(key, '[filtered]')
-          hashModified = true
-          hasSensitive = true
-        }
-      }
-
-      if (hashModified) {
-        url.hash = (isHashSearch ? '?' : '') + hashParams.toString()
-      }
-    }
-
     if (!hasSensitive) return urlStr
 
     if (isSearch) {
