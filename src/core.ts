@@ -109,6 +109,7 @@ async function enrichFrames(frames: FrameRaw[]): Promise<FrameWithContext[]> {
 import { toError } from './_shared/toError'
 import { RateLimiter } from './_shared/rateLimiter'
 import { syncGlobalHandlers } from './integrations/globalHandlers'
+import { installBreadcrumbs, uninstallBreadcrumbs, getBreadcrumbBuffer } from './integrations/breadcrumbs'
 
 // ── Dedup helpers ─────────────────────────────────────────────────────────────
 
@@ -136,6 +137,15 @@ export class CentryClient {
     }
     this.url = envelopeUrl(config.project)
     this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 60_000)
+    // Install breadcrumb interceptors (console, navigation, fetch)
+    if (typeof window !== 'undefined' && config.enabled !== false) {
+      installBreadcrumbs()
+    }
+  }
+
+  /** Tear down interceptors. Called when the client is replaced. */
+  destroy(): void {
+    uninstallBreadcrumbs()
   }
 
   /** Capture a manually-caught exception (handled = true). */
@@ -198,7 +208,7 @@ export class CentryClient {
         level: 'error',
         environment: this.config.environment,
         release: this.config.release,
-        breadcrumbs: { values: [] },
+        breadcrumbs: { values: getBreadcrumbBuffer()?.snapshot() ?? [] },
         exception: {
           values: [{
             type: err.name || 'Error',
@@ -307,6 +317,7 @@ let _client: CentryClient | null = null
  * init({ project: 'my-project', globalHandlers: false })
  */
 export function init(config: CentryConfig): CentryClient {
+  _client?.destroy()
   _client = new CentryClient(config)
   syncGlobalHandlers(config.globalHandlers === false ? null : _client)
   return _client
