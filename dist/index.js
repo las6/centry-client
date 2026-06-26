@@ -148,10 +148,10 @@ var RateLimiter = class {
     this.windowMs = windowMs;
   }
   allow() {
-    const now = Date.now();
-    this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
+    const now2 = Date.now();
+    this.timestamps = this.timestamps.filter((t) => now2 - t < this.windowMs);
     if (this.timestamps.length >= this.max) return false;
-    this.timestamps.push(now);
+    this.timestamps.push(now2);
     return true;
   }
 };
@@ -239,6 +239,185 @@ function installGlobalHandlers(client) {
     state.manualClients.delete(installId);
     maybeUninstall();
   };
+}
+
+// src/integrations/breadcrumbs.ts
+var MAX_BREADCRUMBS = 100;
+var BreadcrumbBuffer = class {
+  constructor() {
+    this._buf = [];
+  }
+  add(crumb) {
+    this._buf.push(crumb);
+    if (this._buf.length > MAX_BREADCRUMBS) {
+      this._buf.shift();
+    }
+  }
+  snapshot() {
+    return [...this._buf];
+  }
+  clear() {
+    this._buf = [];
+  }
+};
+var _buffer = null;
+var _cleanupFns = [];
+function now() {
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
+var CONSOLE_LEVELS = [
+  { method: "debug", level: "debug" },
+  { method: "info", level: "info" },
+  { method: "warn", level: "warning" },
+  { method: "error", level: "error" }
+];
+function installConsoleInterceptors(buf) {
+  const originals = {};
+  for (const { method, level } of CONSOLE_LEVELS) {
+    const original = console[method].bind(console);
+    originals[method] = original;
+    console[method] = (...args) => {
+      try {
+        buf.add({
+          timestamp: now(),
+          type: "default",
+          category: "console",
+          level,
+          message: args.map((a) => {
+            if (typeof a === "string") return a;
+            try {
+              return JSON.stringify(a);
+            } catch {
+              return String(a);
+            }
+          }).join(" ").slice(0, 256)
+        });
+      } catch {
+      }
+      original(...args);
+    };
+  }
+  return () => {
+    for (const { method } of CONSOLE_LEVELS) {
+      if (originals[method]) {
+        ;
+        console[method] = originals[method];
+      }
+    }
+  };
+}
+function installNavigationInterceptors(buf) {
+  if (typeof window === "undefined" || typeof history === "undefined") return () => {
+  };
+  let currentUrl = window.location.href;
+  function recordNavigation(to) {
+    try {
+      buf.add({
+        timestamp: now(),
+        type: "navigation",
+        category: "navigation",
+        data: {
+          from: currentUrl.replace(window.location.origin, "") || "/",
+          to: to.startsWith("http") ? to.replace(window.location.origin, "") : to
+        }
+      });
+      currentUrl = window.location.href;
+    } catch {
+    }
+  }
+  const origPush = history.pushState.bind(history);
+  const origReplace = history.replaceState.bind(history);
+  history.pushState = function(...args) {
+    origPush(...args);
+    recordNavigation(typeof args[2] === "string" ? args[2] : window.location.href);
+  };
+  history.replaceState = function(...args) {
+    origReplace(...args);
+    recordNavigation(typeof args[2] === "string" ? args[2] : window.location.href);
+  };
+  function onPopState() {
+    recordNavigation(window.location.href);
+  }
+  window.addEventListener("popstate", onPopState);
+  return () => {
+    history.pushState = origPush;
+    history.replaceState = origReplace;
+    window.removeEventListener("popstate", onPopState);
+  };
+}
+function installFetchInterceptor(buf) {
+  if (typeof window === "undefined" || !window.fetch) return () => {
+  };
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async function(input, init2) {
+    const startedAt = now();
+    let url = "";
+    let method = (init2?.method ?? "GET").toUpperCase();
+    try {
+      if (typeof input === "string") {
+        url = input;
+      } else if (input instanceof URL) {
+        url = input.toString();
+      } else if (input instanceof Request) {
+        url = input.url;
+        method = (input.method ?? method).toUpperCase();
+      }
+      url = url.replace(/^https?:\/\/[^/]+/, "").replace(/\?.*$/, "") || "/";
+    } catch {
+      url = "(unknown)";
+    }
+    try {
+      const response = await originalFetch(input, init2);
+      try {
+        buf.add({
+          timestamp: startedAt,
+          type: "http",
+          category: "fetch",
+          data: { url, method, status_code: response.status }
+        });
+      } catch {
+      }
+      return response;
+    } catch (err) {
+      try {
+        buf.add({
+          timestamp: startedAt,
+          type: "http",
+          category: "fetch",
+          level: "error",
+          data: { url, method, status_code: 0 }
+        });
+      } catch {
+      }
+      throw err;
+    }
+  };
+  return () => {
+    window.fetch = originalFetch;
+  };
+}
+function installBreadcrumbs() {
+  uninstallBreadcrumbs();
+  _buffer = new BreadcrumbBuffer();
+  _cleanupFns = [
+    installConsoleInterceptors(_buffer),
+    installNavigationInterceptors(_buffer),
+    installFetchInterceptor(_buffer)
+  ];
+  return _buffer;
+}
+function uninstallBreadcrumbs() {
+  for (const fn of _cleanupFns) {
+    try {
+      fn();
+    } catch {
+    }
+  }
+  _cleanupFns = [];
+  _buffer = null;
+}
+function getBreadcrumbBuffer() {
+  return _buffer;
 }
 
 // src/core.ts
@@ -339,6 +518,13 @@ var CentryClient = class {
     };
     this.url = envelopeUrl(config.project);
     this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 6e4);
+    if (typeof window !== "undefined" && config.enabled !== false) {
+      installBreadcrumbs();
+    }
+  }
+  /** Tear down interceptors. Called when the client is replaced. */
+  destroy() {
+    uninstallBreadcrumbs();
   }
   /** Capture a manually-caught exception (handled = true). */
   captureException(error) {
@@ -387,7 +573,7 @@ var CentryClient = class {
         level: "error",
         environment: this.config.environment,
         release: this.config.release,
-        breadcrumbs: { values: [] },
+        breadcrumbs: { values: getBreadcrumbBuffer()?.snapshot() ?? [] },
         exception: {
           values: [{
             type: err.name || "Error",
@@ -466,6 +652,7 @@ var CentryClient = class {
 };
 var _client = null;
 function init(config) {
+  _client?.destroy();
   _client = new CentryClient(config);
   syncGlobalHandlers(config.globalHandlers === false ? null : _client);
   return _client;

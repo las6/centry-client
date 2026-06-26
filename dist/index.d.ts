@@ -41,6 +41,8 @@ declare class CentryClient {
     private recentErrors;
     private rateLimiter;
     constructor(config: CentryConfig);
+    /** Tear down interceptors. Called when the client is replaced. */
+    destroy(): void;
     /** Capture a manually-caught exception (handled = true). */
     captureException(error: unknown): void;
     /** Internal: capture an unhandled exception (handled = false). Used by globalHandlers. */
