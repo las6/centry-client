@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { CentryClient, init, captureException, getClient, resetClientForTests } from './core'
 import { installGlobalHandlers } from './integrations/globalHandlers'
 
+let fetchMock: ReturnType<typeof vi.fn>
+
 async function drain() {
   await new Promise((r) => setTimeout(r, 10))
 }
@@ -25,7 +27,13 @@ function setupMocks() {
   vi.stubGlobal('crypto', {
     randomUUID: () => '11111111-2222-4333-8444-555555555555',
   })
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('ok', { status: 200 })))
+  fetchMock = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }))
+  vi.stubGlobal('fetch', fetchMock)
+  Object.defineProperty(window, 'fetch', {
+    value: fetchMock,
+    configurable: true,
+    writable: true,
+  })
 }
 
 describe('CentryClient', () => {
@@ -90,6 +98,22 @@ describe('CentryClient', () => {
       expect(event.environment).toBe('staging')
       expect(event.release).toBe('1.0.0')
     })
+
+    it('trims oversized breadcrumbs before sending', async () => {
+      const client = new CentryClient({ project: 'test-project' })
+      for (let i = 0; i < 80; i++) {
+        console.error(`crumb-${i}-${'x'.repeat(200)}`)
+      }
+
+      client.captureException(new Error('kapow'))
+      await drain()
+
+      const event = await parseEvent(0)
+      expect(event.debug_meta.centry.payload_trimmed).toBe(true)
+      expect(event.debug_meta.centry.dropped).toContain('breadcrumbs_tail')
+      expect(event.breadcrumbs.values.length).toBeLessThanOrEqual(40)
+    })
+
   })
 
   describe('dedup', () => {

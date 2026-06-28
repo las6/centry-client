@@ -5,7 +5,7 @@ Lightweight error tracking SDK for [Centry](https://github.com/las6/centry). Sup
 ## Install
 
 ```bash
-npm install las6/centry-client
+npm install centry-client
 ```
 
 ---
@@ -70,6 +70,24 @@ import { CentryClient } from 'centry-client'
 
 const client = new CentryClient({ project: 'my-project' })
 client.captureException(error)
+```
+
+### Transport reliability
+
+Browser events are trimmed automatically before transport when optional fields would make the payload too large. The SDK keeps the core error data first: exception type/value, stack frames, release/environment, and recent breadcrumbs.
+
+If an event still cannot be sent, use `onSendError` to surface that locally:
+
+```ts
+import { init } from 'centry-client'
+import type { SendErrorReason } from 'centry-client'
+
+init({
+  project: 'my-project',
+  onSendError(error, payloadSize, reason: SendErrorReason | undefined) {
+    console.warn('Centry send failed', { reason, payloadSize, error })
+  },
+})
 ```
 
 ---
@@ -180,3 +198,4 @@ Most options apply to all three targets (`init()`, `initWorker()`, `initNode()`,
 | `allowUrls` | `RegExp[]` | — | Only mark frames matching these URLs as in-app (browser only) |
 | `maxEventsPerMinute` | `number` | `10` | Hard cap on errors sent per 60-second window |
 | `dedupWindowMs` | `number` | `10000` | Suppress duplicate errors for this duration (ms) |
+| `onSendError` | `(error, payloadSize, reason) => void` | `undefined` | Called when the SDK drops an event or transport fails |

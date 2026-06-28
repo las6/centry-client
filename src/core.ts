@@ -1,8 +1,9 @@
 import { parseStack } from './stackParser'
-import type { CentryConfig } from './types'
+import type { CentryConfig, SendErrorReason } from './types'
 import { envelopeUrl } from './types'
 import { scrubUrl } from './utils'
 import { buildEnvelope } from './_shared/envelope'
+import { prepareBrowserEventForTransport } from './_shared/browserEventPayload'
 
 // ── UA parser ─────────────────────────────────────────────────────────────────
 
@@ -49,61 +50,12 @@ function parseUa(): { browser: { name: string; version: string }; os: { name: st
   }
 }
 
-// ── Source context fetcher ────────────────────────────────────────────────────
-
-const sourceCache = new Map<string, string[] | null>()
-
-async function fetchSourceLines(url: string): Promise<string[] | null> {
-  if (sourceCache.has(url)) return sourceCache.get(url)!
-  try {
-    const ac = new AbortController()
-    const timer = setTimeout(() => ac.abort(), 2000)
-    const resp = await fetch(url, { signal: ac.signal, credentials: 'omit' })
-    clearTimeout(timer)
-    if (!resp.ok) { sourceCache.set(url, null); return null }
-    const text = await resp.text()
-    const lines = text.split('\n')
-    sourceCache.set(url, lines)
-    return lines
-  } catch {
-    sourceCache.set(url, null)
-    return null
-  }
-}
-
-const CONTEXT_LINES = 5
-
 interface FrameRaw {
   filename: string
   function: string
   lineno: number | null
   colno: number | null
   in_app: boolean
-}
-
-interface FrameWithContext extends FrameRaw {
-  pre_context?: string[]
-  context_line?: string
-  post_context?: string[]
-}
-
-async function enrichFrames(frames: FrameRaw[]): Promise<FrameWithContext[]> {
-  const urls = [...new Set(
-    frames.map((f) => f.filename).filter((fn) => fn && /^https?:\/\//.test(fn))
-  )]
-  const sourceMap = new Map<string, string[] | null>()
-  await Promise.all(urls.map(async (url) => { sourceMap.set(url, await fetchSourceLines(url)) }))
-  return frames.map((f): FrameWithContext => {
-    const lines = sourceMap.get(f.filename) ?? null
-    if (!lines || !f.lineno) return f
-    const idx = f.lineno - 1
-    return {
-      ...f,
-      pre_context: lines.slice(Math.max(0, idx - CONTEXT_LINES), idx),
-      context_line: lines[idx],
-      post_context: lines.slice(idx + 1, idx + 1 + CONTEXT_LINES),
-    }
-  })
 }
 
 import { toError } from './_shared/toError'
@@ -120,6 +72,22 @@ function normalizeForDedup(url: string): string {
   // If path has a file extension, strip all query params (they're cache busters)
   // Otherwise keep them (extensionless paths may encode route params in query)
   return /\.[a-z0-9]{2,8}$/i.test(path) ? path : url
+}
+
+function isDev(): boolean {
+  return Boolean(import.meta.env?.DEV)
+}
+
+function warnDev(message: string): void {
+  if (isDev()) console.warn(message)
+}
+
+function getBrowserFetch(): typeof fetch | null {
+  if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
+    return window.fetch.bind(window)
+  }
+  if (typeof globalThis.fetch === 'function') return globalThis.fetch.bind(globalThis)
+  return null
 }
 
 // ── Core client ───────────────────────────────────────────────────────────────
@@ -141,6 +109,16 @@ export class CentryClient {
     if (typeof window !== 'undefined' && config.enabled !== false) {
       installBreadcrumbs()
     }
+  }
+
+  private reportSendError(error: Error, payloadSize: number, reason: SendErrorReason): void {
+    try {
+      this.config.onSendError?.(error, payloadSize, reason)
+    } catch {
+      // send error reporting must never throw
+    }
+
+    warnDev(`[centry] ${reason}: ${error.message} (${payloadSize} bytes)`)
   }
 
   /** Tear down interceptors. Called when the client is replaced. */
@@ -199,7 +177,6 @@ export class CentryClient {
       // Rate limit — hard cap per minute, protects against runaway loops
       if (!this.rateLimiter.allow()) return
 
-      const enrichedFrames = await enrichFrames(rawFrames)
       const { browser, os } = parseUa()
 
       const event: Record<string, unknown> = {
@@ -214,7 +191,7 @@ export class CentryClient {
             type: err.name || 'Error',
             value: err.message,
             mechanism: { type: handled ? 'generic' : 'onerror', handled },
-            stacktrace: { frames: enrichedFrames },
+            stacktrace: { frames: rawFrames },
           }],
         },
         contexts: {
@@ -278,21 +255,49 @@ export class CentryClient {
 
   private send(event: Record<string, unknown>): void {
     try {
-      const envelope = buildEnvelope(event)
+      const prepared = prepareBrowserEventForTransport(event)
+      if (!prepared.event) {
+        this.reportSendError(new Error('Event exceeded browser transport budget'), prepared.originalSize, 'payload_too_large')
+        return
+      }
+
+      if (prepared.dropped.length > 0) warnDev(`[centry] trimmed event fields: ${prepared.dropped.join(', ')}`)
+
+      const envelope = buildEnvelope(prepared.event)
       const blob = new Blob([envelope], { type: 'text/plain' })
 
       if (navigator.sendBeacon) {
-        navigator.sendBeacon(this.url, blob)
+        const accepted = navigator.sendBeacon(this.url, blob)
+        if (accepted) return
+
+        warnDev(`[centry] beacon_refused: navigator.sendBeacon refused the payload (${prepared.envelopeSize} bytes)`)
       } else {
-        fetch(this.url, {
-          method: 'POST',
-          body: envelope,
-          headers: { 'Content-Type': 'text/plain' },
-          keepalive: true,
-        }).catch(() => {/* silent */})
+        warnDev('[centry] sendBeacon unavailable, falling back to fetch')
       }
+
+      const fetchImpl = getBrowserFetch()
+      if (!fetchImpl) {
+        this.reportSendError(new Error('No fetch implementation available for fallback transport'), prepared.envelopeSize, 'send_failed')
+        return
+      }
+
+      fetchImpl(this.url, {
+        method: 'POST',
+        body: envelope,
+        headers: { 'Content-Type': 'text/plain' },
+        keepalive: true,
+      })
+        .then((response) => {
+          if (!response.ok) {
+            this.reportSendError(new Error(`Ingest responded with HTTP ${response.status}`), prepared.envelopeSize, 'http_error')
+          }
+        })
+        .catch((error: unknown) => {
+          const nextError = error instanceof Error ? error : new Error(String(error))
+          this.reportSendError(nextError, prepared.envelopeSize, 'network_error')
+        })
     } catch {
-      // send must never throw
+      this.reportSendError(new Error('Unexpected send failure'), 0, 'send_failed')
     }
   }
 }

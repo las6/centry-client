@@ -1,3 +1,4 @@
+type SendErrorReason = 'payload_too_large' | 'http_error' | 'network_error' | 'send_failed';
 interface CentryConfig {
     project: string;
     environment?: string;
@@ -10,6 +11,8 @@ interface CentryConfig {
     maxEventsPerMinute?: number;
     /** How long (ms) to suppress duplicate errors. Defaults to 10000 (10s). */
     dedupWindowMs?: number;
+    /** Called when an event cannot be sent or must be dropped for transport reasons. */
+    onSendError?: (error: Error, payloadSize: number, reason?: SendErrorReason) => void;
 }
 
 declare abstract class BaseServerClient {

@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 
+type SendErrorReason = 'payload_too_large' | 'http_error' | 'network_error' | 'send_failed';
 interface CentryConfig {
     project: string;
     environment?: string;
@@ -12,6 +13,8 @@ interface CentryConfig {
     maxEventsPerMinute?: number;
     /** How long (ms) to suppress duplicate errors. Defaults to 10000 (10s). */
     dedupWindowMs?: number;
+    /** Called when an event cannot be sent or must be dropped for transport reasons. */
+    onSendError?: (error: Error, payloadSize: number, reason?: SendErrorReason) => void;
 }
 
 interface CentryProviderProps extends CentryConfig {
@@ -41,6 +44,7 @@ declare class CentryClient {
     private recentErrors;
     private rateLimiter;
     constructor(config: CentryConfig);
+    private reportSendError;
     /** Tear down interceptors. Called when the client is replaced. */
     destroy(): void;
     /** Capture a manually-caught exception (handled = true). */
@@ -102,4 +106,4 @@ declare function getClient(): CentryClient | null;
  */
 declare function installGlobalHandlers(client: CentryClient): () => void;
 
-export { CentryClient, type CentryConfig, CentryProvider, captureException, captureMessage, getClient, init, installGlobalHandlers };
+export { CentryClient, type CentryConfig, CentryProvider, type SendErrorReason, captureException, captureMessage, getClient, init, installGlobalHandlers };
