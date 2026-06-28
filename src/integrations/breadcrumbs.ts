@@ -3,6 +3,8 @@
 // ring-buffer of breadcrumbs. The buffer is snapshotted into each captured
 // event so the trail of activity leading up to the error is preserved.
 
+import { scrubUrl } from '../utils'
+
 export interface Breadcrumb {
   timestamp: string
   type: string
@@ -108,8 +110,8 @@ function installNavigationInterceptors(buf: BreadcrumbBuffer): () => void {
         type: 'navigation',
         category: 'navigation',
         data: {
-          from: currentUrl.replace(window.location.origin, '') || '/',
-          to: to.startsWith('http') ? to.replace(window.location.origin, '') : to,
+          from: scrubUrl(currentUrl.replace(window.location.origin, '') || '/'),
+          to: scrubUrl(to.startsWith('http') ? to.replace(window.location.origin, '') : to),
         },
       })
       currentUrl = window.location.href
