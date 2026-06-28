@@ -4,6 +4,7 @@ import { envelopeUrl } from './types'
 import { scrubUrl } from './utils'
 import { buildEnvelope } from './_shared/envelope'
 import { prepareBrowserEventForTransport } from './_shared/browserEventPayload'
+import { enrichTopFrameWithContext } from './_shared/sourceContext'
 
 // ── UA parser ─────────────────────────────────────────────────────────────────
 
@@ -164,6 +165,7 @@ export class CentryClient {
         ...f,
         in_app: !allowUrls || allowUrls.some((re) => re.test(f.filename)),
       }))
+      const enrichedFrames = await enrichTopFrameWithContext(rawFrames, window.location.href)
 
       // Client-side dedup — filename-based fingerprint within dedupWindowMs (default 10s)
       const firstFrame = rawFrames.find(f => f.in_app) ?? rawFrames[0]
@@ -191,7 +193,7 @@ export class CentryClient {
             type: err.name || 'Error',
             value: err.message,
             mechanism: { type: handled ? 'generic' : 'onerror', handled },
-            stacktrace: { frames: rawFrames },
+            stacktrace: { frames: enrichedFrames },
           }],
         },
         contexts: {

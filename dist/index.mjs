@@ -288,6 +288,98 @@ ${eventJson}
   };
 }
 
+// src/_shared/sourceContext.ts
+var FETCH_TIMEOUT_MS = 1500;
+var MAX_CONTEXT_CHARS = 240;
+var CONTEXT_LINES = 2;
+var sourceCache = /* @__PURE__ */ new Map();
+function truncateText(value, maxChars) {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars - 3)}...`;
+}
+function sameOriginUrl(filename, pageUrl) {
+  if (!filename || !pageUrl) return null;
+  try {
+    const page = new URL(pageUrl);
+    const url = new URL(filename, page.href);
+    if (!/^https?:$/.test(url.protocol)) return null;
+    if (url.origin !== page.origin) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+async function fetchSourceText(url) {
+  const cached = sourceCache.get(url);
+  if (cached) return cached;
+  const request = (async () => {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+      const response = await fetch(url, {
+        signal: controller.signal,
+        credentials: "omit"
+      });
+      clearTimeout(timeout);
+      if (!response.ok) return null;
+      return await response.text();
+    } catch {
+      return null;
+    }
+  })();
+  sourceCache.set(url, request);
+  return request;
+}
+function extractNormalContext(lines, lineno) {
+  const index = lineno - 1;
+  const line = lines[index];
+  if (line == null) return null;
+  return {
+    pre_context: lines.slice(Math.max(0, index - CONTEXT_LINES), index).map((entry) => truncateText(entry, MAX_CONTEXT_CHARS)),
+    context_line: truncateText(line, MAX_CONTEXT_CHARS),
+    post_context: lines.slice(index + 1, index + 1 + CONTEXT_LINES).map((entry) => truncateText(entry, MAX_CONTEXT_CHARS))
+  };
+}
+function extractMinifiedContext(line, colno) {
+  const center = Math.max(0, (colno ?? 1) - 1);
+  const halfWindow = Math.floor(MAX_CONTEXT_CHARS / 2);
+  const start = Math.max(0, center - halfWindow);
+  const end = Math.min(line.length, center + halfWindow);
+  return {
+    context_line: `${start > 0 ? "..." : ""}${line.slice(start, end)}${end < line.length ? "..." : ""}`
+  };
+}
+function buildSourceContext(sourceText, frame) {
+  if (!frame.lineno) return null;
+  const lines = sourceText.split("\n");
+  const maxLineLength = lines.reduce((max, line2) => Math.max(max, line2.length), 0);
+  const line = lines[frame.lineno - 1];
+  if (line == null) return null;
+  const looksMinified = lines.length <= 5 && maxLineLength > 1e3 || line.length > 1e3;
+  if (looksMinified) return extractMinifiedContext(line, frame.colno);
+  return extractNormalContext(lines, frame.lineno);
+}
+async function enrichTopFrameWithContext(frames, pageUrl) {
+  const targetIndex = (() => {
+    for (let i = frames.length - 1; i >= 0; i -= 1) {
+      if (frames[i].in_app && sameOriginUrl(frames[i].filename, pageUrl)) return i;
+    }
+    for (let i = frames.length - 1; i >= 0; i -= 1) {
+      if (sameOriginUrl(frames[i].filename, pageUrl)) return i;
+    }
+    return -1;
+  })();
+  if (targetIndex === -1) return frames;
+  const frame = frames[targetIndex];
+  const url = sameOriginUrl(frame.filename, pageUrl);
+  if (!url) return frames;
+  const sourceText = await fetchSourceText(url);
+  if (!sourceText) return frames;
+  const sourceContext = buildSourceContext(sourceText, frame);
+  if (!sourceContext) return frames;
+  return frames.map((entry, index) => index === targetIndex ? { ...entry, ...sourceContext } : entry);
+}
+
 // src/_shared/toError.ts
 function toError(value) {
   if (value instanceof Error) return value;
@@ -692,6 +784,7 @@ var CentryClient = class {
         ...f,
         in_app: !allowUrls || allowUrls.some((re) => re.test(f.filename))
       }));
+      const enrichedFrames = await enrichTopFrameWithContext(rawFrames, window.location.href);
       const firstFrame = rawFrames.find((f) => f.in_app) ?? rawFrames[0];
       const fileKey = firstFrame ? normalizeForDedup(firstFrame.filename) : "";
       const dedupKey = `${err.name}:${err.message}:${fileKey}`;
@@ -713,7 +806,7 @@ var CentryClient = class {
             type: err.name || "Error",
             value: err.message,
             mechanism: { type: handled ? "generic" : "onerror", handled },
-            stacktrace: { frames: rawFrames }
+            stacktrace: { frames: enrichedFrames }
           }]
         },
         contexts: {
