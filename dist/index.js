@@ -507,8 +507,8 @@ function installNavigationInterceptors(buf) {
         type: "navigation",
         category: "navigation",
         data: {
-          from: currentUrl.replace(window.location.origin, "") || "/",
-          to: to.startsWith("http") ? to.replace(window.location.origin, "") : to
+          from: scrubUrl(currentUrl.replace(window.location.origin, "") || "/"),
+          to: scrubUrl(to.startsWith("http") ? to.replace(window.location.origin, "") : to)
         }
       });
       currentUrl = window.location.href;

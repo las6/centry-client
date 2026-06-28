@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { installBreadcrumbs, uninstallBreadcrumbs, getBreadcrumbBuffer } from './integrations/breadcrumbs'
+import { installBreadcrumbs, uninstallBreadcrumbs } from './integrations/breadcrumbs'
 
 describe('Breadcrumbs Integration', () => {
   describe('navigation', () => {
