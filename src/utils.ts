@@ -12,26 +12,60 @@ export function scrubUrl(urlStr: string | undefined | null): string {
     let hasSensitive = false
     const sensitiveKeys = [
       'token', 'api_key', 'apikey', 'auth', 'password', 'passwd',
-      'secret', 'session', 'sid', 'authorization', 'credential'
+      'secret', 'session', 'sid', 'authorization', 'credential',
+      'sig', 'signature', 'key', 'code', 'pk', 'sk', 'jwt',
+      'access_token', 'refresh_token', 'id_token'
     ]
 
-    // We iterate over keys and check if any match our sensitive list
-    // searchParams.keys() can contain duplicates, but that's fine for our check
-    for (const key of Array.from(url.searchParams.keys())) {
+    const isSensitive = (key: string) => {
       const lowerKey = key.toLowerCase()
-      if (sensitiveKeys.some(sk => lowerKey.includes(sk))) {
+      return sensitiveKeys.some(sk => lowerKey.includes(sk))
+    }
+
+    // 1. Scrub basic auth
+    if (url.username || url.password) {
+      if (url.username) url.username = '[filtered]'
+      if (url.password) url.password = '[filtered]'
+      hasSensitive = true
+    }
+
+    // 2. Scrub query params
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (isSensitive(key)) {
         url.searchParams.set(key, '[filtered]')
         hasSensitive = true
+      }
+    }
+
+    // 3. Scrub hash if it looks like query params
+    if (url.hash.length > 1) {
+      const hashContent = url.hash.substring(1)
+      if (hashContent.includes('=') && sensitiveKeys.some(sk => hashContent.toLowerCase().includes(sk))) {
+        const hashParams = new URLSearchParams(hashContent)
+        let hashChanged = false
+        for (const key of Array.from(hashParams.keys())) {
+          if (isSensitive(key)) {
+            hashParams.set(key, '[filtered]')
+            hashChanged = true
+            hasSensitive = true
+          }
+        }
+        if (hashChanged) {
+          url.hash = hashParams.toString()
+        }
       }
     }
 
     if (!hasSensitive) return urlStr
 
     if (isSearch) {
-      return '?' + url.searchParams.toString()
+      return ('?' + url.searchParams.toString()).replace(/%5Bfiltered%5D/g, '[filtered]')
     }
 
-    const result = url.toString()
+    let result = url.toString()
+
+    // Replace encoded [filtered] with literal
+    result = result.replace(/%5Bfiltered%5D/g, '[filtered]')
 
     // If the original URL was absolute, return the result
     if (/^https?:\/\//i.test(urlStr)) {
@@ -41,8 +75,6 @@ export function scrubUrl(urlStr: string | undefined | null): string {
     // If it was a relative URL, try to preserve the relative-ness
     if (result.startsWith('http://dummy.com/')) {
       const relative = result.substring('http://dummy.com/'.length)
-      // If original didn't have a leading slash, and dummy-based URL added one,
-      // we might want to be careful, but usually these are handled fine.
       return (urlStr.startsWith('/') ? '/' : '') + relative
     }
 
