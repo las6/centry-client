@@ -12,8 +12,16 @@ export function scrubUrl(urlStr: string | undefined | null): string {
     let hasSensitive = false
     const sensitiveKeys = [
       'token', 'api_key', 'apikey', 'auth', 'password', 'passwd',
-      'secret', 'session', 'sid', 'authorization', 'credential'
+      'secret', 'session', 'sid', 'authorization', 'credential',
+      'sig', 'signature', 'key', 'code', 'pk', 'sk', 'jwt',
+      'access_token', 'refresh_token', 'id_token'
     ]
+
+    if (url.username || url.password) {
+      if (url.username) url.username = '[filtered]'
+      if (url.password) url.password = '[filtered]'
+      hasSensitive = true
+    }
 
     // We iterate over keys and check if any match our sensitive list
     // searchParams.keys() can contain duplicates, but that's fine for our check
@@ -27,11 +35,18 @@ export function scrubUrl(urlStr: string | undefined | null): string {
 
     if (!hasSensitive) return urlStr
 
+    let result = ''
     if (isSearch) {
-      return '?' + url.searchParams.toString()
+      result = '?' + url.searchParams.toString()
+    } else {
+      result = url.toString()
     }
 
-    const result = url.toString()
+    // URL.toString() / searchParams.toString() encode [ ] as %5B %5D.
+    // We want to keep [filtered] as a literal string for readability in breadcrumbs.
+    result = result.replace(/%5Bfiltered%5D/g, '[filtered]')
+
+    if (isSearch) return result
 
     // If the original URL was absolute, return the result
     if (/^https?:\/\//i.test(urlStr)) {
