@@ -80,25 +80,44 @@ var RateLimiter = class {
 };
 
 // src/utils.ts
+var sensitiveKeys = [
+  "token",
+  "api_key",
+  "apikey",
+  "auth",
+  "password",
+  "passwd",
+  "secret",
+  "session",
+  "sid",
+  "authorization",
+  "credential",
+  "sig",
+  "signature",
+  "key",
+  "code",
+  "pk",
+  "sk",
+  "jwt",
+  "access_token",
+  "refresh_token",
+  "id_token"
+];
 function scrubUrl(urlStr) {
   if (!urlStr) return "";
   try {
     const isSearch = urlStr.startsWith("?");
+    const isHash = urlStr.startsWith("#");
     const url = new URL(urlStr, "http://dummy.com");
     let hasSensitive = false;
-    const sensitiveKeys = [
-      "token",
-      "api_key",
-      "apikey",
-      "auth",
-      "password",
-      "passwd",
-      "secret",
-      "session",
-      "sid",
-      "authorization",
-      "credential"
-    ];
+    if (url.username) {
+      url.username = "[filtered]";
+      hasSensitive = true;
+    }
+    if (url.password) {
+      url.password = "[filtered]";
+      hasSensitive = true;
+    }
     for (const key of Array.from(url.searchParams.keys())) {
       const lowerKey = key.toLowerCase();
       if (sensitiveKeys.some((sk) => lowerKey.includes(sk))) {
@@ -106,19 +125,42 @@ function scrubUrl(urlStr) {
         hasSensitive = true;
       }
     }
+    const hash = url.hash;
+    if (hash && (hash.includes("=") || hash.includes("&"))) {
+      const hashContent = hash.substring(1);
+      const hashParams = new URLSearchParams(hashContent);
+      let hashChanged = false;
+      for (const key of Array.from(hashParams.keys())) {
+        const lowerKey = key.toLowerCase();
+        if (sensitiveKeys.some((sk) => lowerKey.includes(sk))) {
+          hashParams.set(key, "[filtered]");
+          hashChanged = true;
+          hasSensitive = true;
+        }
+      }
+      if (hashChanged) {
+        url.hash = "#" + hashParams.toString();
+      }
+    }
     if (!hasSensitive) return urlStr;
     if (isSearch) {
-      return "?" + url.searchParams.toString();
+      const searchStr = "?" + url.searchParams.toString();
+      return searchStr.replace(/%5Bfiltered%5D/gi, "[filtered]");
+    }
+    if (isHash) {
+      const hashStr = url.hash;
+      return hashStr.replace(/%5Bfiltered%5D/gi, "[filtered]");
     }
     const result = url.toString();
     if (/^https?:\/\//i.test(urlStr)) {
-      return result;
+      return result.replace(/%5Bfiltered%5D/gi, "[filtered]");
     }
     if (result.startsWith("http://dummy.com/")) {
       const relative = result.substring("http://dummy.com/".length);
-      return (urlStr.startsWith("/") ? "/" : "") + relative;
+      const res = (urlStr.startsWith("/") ? "/" : "") + relative;
+      return res.replace(/%5Bfiltered%5D/gi, "[filtered]");
     }
-    return result;
+    return result.replace(/%5Bfiltered%5D/gi, "[filtered]");
   } catch {
     return urlStr;
   }

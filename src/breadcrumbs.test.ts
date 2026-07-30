@@ -43,9 +43,9 @@ describe('Breadcrumbs Integration', () => {
       const navCrumb = crumbs.find(c => c.type === 'navigation')
 
       expect(navCrumb).toBeDefined()
-      // We WANT these to be filtered. Note: URLSearchParams.toString() URL-encodes brackets
-      expect(navCrumb?.data?.from).toBe('/start?token=%5Bfiltered%5D')
-      expect(navCrumb?.data?.to).toBe('/target?api_key=%5Bfiltered%5D')
+      // We WANT these to be filtered.
+      expect(navCrumb?.data?.from).toBe('/start?token=[filtered]')
+      expect(navCrumb?.data?.to).toBe('/target?api_key=[filtered]')
     })
   })
 })
