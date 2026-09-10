@@ -150,7 +150,7 @@ describe('WorkerClient', () => {
       await vi.runAllTimersAsync()
 
       const event = JSON.parse(fetchCalls()[0].body.split('\n')[2])
-      expect(event.request.url).toBe('https://api.example.com/v1/user?token=%5Bfiltered%5D&api_key=%5Bfiltered%5D')
+      expect(event.request.url).toBe('https://api.example.com/v1/user?token=[filtered]&api_key=[filtered]')
     })
 
     it('keeps referer but scrubs sensitive query parameters from it', async () => {
@@ -166,7 +166,7 @@ describe('WorkerClient', () => {
 
       const event = JSON.parse(fetchCalls()[0].body.split('\n')[2])
       const headers = (event.request as Record<string, unknown>).headers as Record<string, string>
-      expect(headers['referer']).toBe('https://dashboard.example.com/reset?token=%5Bfiltered%5D&tab=security')
+      expect(headers['referer']).toBe('https://dashboard.example.com/reset?token=[filtered]&tab=security')
     })
   })
 
