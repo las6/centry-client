@@ -46,6 +46,18 @@ function now(): string {
   return new Date().toISOString()
 }
 
+/** Strip origin and query so breadcrumb URLs stay concise and privacy-safe. */
+function normalizeBreadcrumbUrl(url: string): string {
+  return url.replace(/^https?:\/\/[^/]+/, '').replace(/\?.*$/, '') || '/'
+}
+
+/** Serialize a console argument without losing Error details to `{}`. */
+function formatConsoleArg(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value instanceof Error) return `${value.name}: ${value.message}`
+  try { return JSON.stringify(value) } catch { return String(value) }
+}
+
 // ── Console interceptor ───────────────────────────────────────────────────────
 
 type ConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
@@ -73,10 +85,7 @@ function installConsoleInterceptors(buf: BreadcrumbBuffer): () => void {
           category: 'console',
           level,
           message: args
-            .map((a) => {
-              if (typeof a === 'string') return a
-              try { return JSON.stringify(a) } catch { return String(a) }
-            })
+            .map((a) => formatConsoleArg(a))
             .join(' ')
             .slice(0, 256),
         })
@@ -168,7 +177,7 @@ function installFetchInterceptor(buf: BreadcrumbBuffer): () => void {
         method = (input.method ?? method).toUpperCase()
       }
       // Strip origin + query to keep breadcrumbs concise and privacy-safe
-      url = url.replace(/^https?:\/\/[^/]+/, '').replace(/\?.*$/, '') || '/'
+      url = normalizeBreadcrumbUrl(url)
     } catch {
       url = '(unknown)'
     }
@@ -203,6 +212,58 @@ function installFetchInterceptor(buf: BreadcrumbBuffer): () => void {
   }
 }
 
+// ── XHR interceptor ───────────────────────────────────────────────────────────
+// Axios and other libraries default to XMLHttpRequest, which `fetch` wrapping
+// does not observe. Record method/url at open() and the status at loadend.
+
+function installXhrInterceptor(buf: BreadcrumbBuffer): () => void {
+  if (typeof XMLHttpRequest === 'undefined') return () => {}
+
+  const proto = XMLHttpRequest.prototype
+  const originalOpen = proto.open as (
+    this: XMLHttpRequest,
+    method: string,
+    url: string | URL,
+    ...rest: unknown[]
+  ) => void
+  const originalSend = proto.send as (this: XMLHttpRequest, ...args: unknown[]) => void
+  const meta = new WeakMap<XMLHttpRequest, { method: string; url: string }>()
+
+  proto.open = function (this: XMLHttpRequest, method: string, url: string | URL, ...rest: unknown[]) {
+    try {
+      meta.set(this, {
+        method: String(method).toUpperCase(),
+        url: normalizeBreadcrumbUrl(String(url)),
+      })
+    } catch { /* never throw */ }
+    return originalOpen.apply(this, [method, url, ...rest])
+  } as typeof proto.open
+
+  proto.send = function (this: XMLHttpRequest, ...args: unknown[]) {
+    try {
+      const info = meta.get(this) ?? { method: 'GET', url: '(unknown)' }
+      this.addEventListener('loadend', () => {
+        try {
+          const status = this.status
+          buf.add({
+            timestamp: now(),
+            type: 'http',
+            category: 'xhr',
+            ...(status === 0 ? { level: 'error' } : {}),
+            data: { url: info.url, method: info.method, status_code: status },
+          })
+        } catch { /* never throw */ }
+      })
+    } catch { /* never throw */ }
+    return originalSend.apply(this, args)
+  } as typeof proto.send
+
+  return () => {
+    proto.open = originalOpen as typeof proto.open
+    proto.send = originalSend as typeof proto.send
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -220,6 +281,7 @@ export function installBreadcrumbs(): BreadcrumbBuffer {
     installConsoleInterceptors(_buffer),
     installNavigationInterceptors(_buffer),
     installFetchInterceptor(_buffer),
+    installXhrInterceptor(_buffer),
   ]
 
   return _buffer

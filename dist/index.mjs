@@ -515,6 +515,18 @@ var _cleanupFns = [];
 function now() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
+function normalizeBreadcrumbUrl(url) {
+  return url.replace(/^https?:\/\/[^/]+/, "").replace(/\?.*$/, "") || "/";
+}
+function formatConsoleArg(value) {
+  if (typeof value === "string") return value;
+  if (value instanceof Error) return `${value.name}: ${value.message}`;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
 var CONSOLE_LEVELS = [
   { method: "debug", level: "debug" },
   { method: "info", level: "info" },
@@ -533,14 +545,7 @@ function installConsoleInterceptors(buf) {
           type: "default",
           category: "console",
           level,
-          message: args.map((a) => {
-            if (typeof a === "string") return a;
-            try {
-              return JSON.stringify(a);
-            } catch {
-              return String(a);
-            }
-          }).join(" ").slice(0, 256)
+          message: args.map((a) => formatConsoleArg(a)).join(" ").slice(0, 256)
         });
       } catch {
       }
@@ -612,7 +617,7 @@ function installFetchInterceptor(buf) {
         url = input.url;
         method = (input.method ?? method).toUpperCase();
       }
-      url = url.replace(/^https?:\/\/[^/]+/, "").replace(/\?.*$/, "") || "/";
+      url = normalizeBreadcrumbUrl(url);
     } catch {
       url = "(unknown)";
     }
@@ -646,13 +651,56 @@ function installFetchInterceptor(buf) {
     window.fetch = originalFetch;
   };
 }
+function installXhrInterceptor(buf) {
+  if (typeof XMLHttpRequest === "undefined") return () => {
+  };
+  const proto = XMLHttpRequest.prototype;
+  const originalOpen = proto.open;
+  const originalSend = proto.send;
+  const meta = /* @__PURE__ */ new WeakMap();
+  proto.open = function(method, url, ...rest) {
+    try {
+      meta.set(this, {
+        method: String(method).toUpperCase(),
+        url: normalizeBreadcrumbUrl(String(url))
+      });
+    } catch {
+    }
+    return originalOpen.apply(this, [method, url, ...rest]);
+  };
+  proto.send = function(...args) {
+    try {
+      const info = meta.get(this) ?? { method: "GET", url: "(unknown)" };
+      this.addEventListener("loadend", () => {
+        try {
+          const status = this.status;
+          buf.add({
+            timestamp: now(),
+            type: "http",
+            category: "xhr",
+            ...status === 0 ? { level: "error" } : {},
+            data: { url: info.url, method: info.method, status_code: status }
+          });
+        } catch {
+        }
+      });
+    } catch {
+    }
+    return originalSend.apply(this, args);
+  };
+  return () => {
+    proto.open = originalOpen;
+    proto.send = originalSend;
+  };
+}
 function installBreadcrumbs() {
   uninstallBreadcrumbs();
   _buffer = new BreadcrumbBuffer();
   _cleanupFns = [
     installConsoleInterceptors(_buffer),
     installNavigationInterceptors(_buffer),
-    installFetchInterceptor(_buffer)
+    installFetchInterceptor(_buffer),
+    installXhrInterceptor(_buffer)
   ];
   return _buffer;
 }
