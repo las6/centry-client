@@ -49,6 +49,25 @@ describe('Breadcrumbs Integration', () => {
     })
   })
 
+  describe('fetch', () => {
+    const originalFetch = window.fetch
+
+    afterEach(() => {
+      uninstallBreadcrumbs()
+      window.fetch = originalFetch
+    })
+
+    it('scrubs sensitive parameters in fetch breadcrumbs', async () => {
+      window.fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }))
+      const buf = installBreadcrumbs()
+
+      await window.fetch('https://example.com/api/data?api_key=secret_key')
+
+      const crumb = buf.snapshot().find(c => c.category === 'fetch')
+      expect(crumb?.data).toEqual({ url: '/api/data', method: 'GET', status_code: 200 })
+    })
+  })
+
   describe('console', () => {
     afterEach(() => uninstallBreadcrumbs())
 

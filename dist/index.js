@@ -548,7 +548,8 @@ function now() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
 function normalizeBreadcrumbUrl(url) {
-  return url.replace(/^https?:\/\/[^/]+/, "").replace(/\?.*$/, "") || "/";
+  const scrubbed = scrubUrl(url);
+  return scrubbed.replace(/^https?:\/\/[^/]+/, "").replace(/\?.*$/, "") || "/";
 }
 function formatConsoleArg(value) {
   if (typeof value === "string") return value;
