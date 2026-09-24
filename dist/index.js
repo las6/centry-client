@@ -75,25 +75,43 @@ function envelopeUrl(project) {
 }
 
 // src/utils.ts
+var sensitiveKeys = [
+  "token",
+  "api_key",
+  "apikey",
+  "auth",
+  "password",
+  "passwd",
+  "secret",
+  "session",
+  "sid",
+  "authorization",
+  "credential",
+  "sig",
+  "signature",
+  "key",
+  "code",
+  "pk",
+  "sk",
+  "jwt",
+  "access_token",
+  "refresh_token",
+  "id_token"
+];
 function scrubUrl(urlStr) {
   if (!urlStr) return "";
   try {
     const isSearch = urlStr.startsWith("?");
     const url = new URL(urlStr, "http://dummy.com");
     let hasSensitive = false;
-    const sensitiveKeys = [
-      "token",
-      "api_key",
-      "apikey",
-      "auth",
-      "password",
-      "passwd",
-      "secret",
-      "session",
-      "sid",
-      "authorization",
-      "credential"
-    ];
+    if (url.username) {
+      url.username = "[filtered]";
+      hasSensitive = true;
+    }
+    if (url.password) {
+      url.password = "[filtered]";
+      hasSensitive = true;
+    }
     for (const key of Array.from(url.searchParams.keys())) {
       const lowerKey = key.toLowerCase();
       if (sensitiveKeys.some((sk) => lowerKey.includes(sk))) {
@@ -101,11 +119,30 @@ function scrubUrl(urlStr) {
         hasSensitive = true;
       }
     }
+    if (url.hash && (url.hash.includes("=") || url.hash.includes("&"))) {
+      const hashContent = url.hash.slice(1);
+      const qIdx = hashContent.indexOf("?");
+      const queryString = qIdx !== -1 ? hashContent.slice(qIdx + 1) : hashContent;
+      const prefix = qIdx !== -1 ? "#" + hashContent.slice(0, qIdx + 1) : "#";
+      const hashParams = new URLSearchParams(queryString);
+      let hashModified = false;
+      for (const key of Array.from(hashParams.keys())) {
+        const lowerKey = key.toLowerCase();
+        if (sensitiveKeys.some((sk) => lowerKey.includes(sk))) {
+          hashParams.set(key, "[filtered]");
+          hashModified = true;
+        }
+      }
+      if (hashModified) {
+        url.hash = prefix + hashParams.toString();
+        hasSensitive = true;
+      }
+    }
     if (!hasSensitive) return urlStr;
     if (isSearch) {
-      return "?" + url.searchParams.toString();
+      return ("?" + url.searchParams.toString()).replaceAll("%5Bfiltered%5D", "[filtered]");
     }
-    const result = url.toString();
+    const result = url.toString().replaceAll("%5Bfiltered%5D", "[filtered]");
     if (/^https?:\/\//i.test(urlStr)) {
       return result;
     }
