@@ -1,5 +1,29 @@
+export const sensitiveKeys = [
+  'token',
+  'api_key',
+  'apikey',
+  'auth',
+  'password',
+  'passwd',
+  'secret',
+  'session',
+  'sid',
+  'authorization',
+  'credential',
+  'sig',
+  'signature',
+  'key',
+  'code',
+  'pk',
+  'sk',
+  'jwt',
+  'access_token',
+  'refresh_token',
+  'id_token',
+]
+
 /**
- * Redacts sensitive query parameters from a URL string.
+ * Redacts sensitive query parameters, credentials, and hash auth data from a URL string.
  */
 export function scrubUrl(urlStr: string | undefined | null): string {
   if (!urlStr) return ''
@@ -10,43 +34,52 @@ export function scrubUrl(urlStr: string | undefined | null): string {
     const url = new URL(urlStr, 'http://dummy.com')
 
     let hasSensitive = false
-    const sensitiveKeys = [
-      'token', 'api_key', 'apikey', 'auth', 'password', 'passwd',
-      'secret', 'session', 'sid', 'authorization', 'credential'
-    ]
 
-    // We iterate over keys and check if any match our sensitive list
-    // searchParams.keys() can contain duplicates, but that's fine for our check
+    if (url.username || url.password) {
+      if (url.username) url.username = '[filtered]'
+      if (url.password) url.password = '[filtered]'
+      hasSensitive = true
+    }
+
+    // Iterate over keys and check if any match our sensitive list
     for (const key of Array.from(url.searchParams.keys())) {
       const lowerKey = key.toLowerCase()
-      if (sensitiveKeys.some(sk => lowerKey.includes(sk))) {
+      if (sensitiveKeys.some((sk) => lowerKey.includes(sk))) {
         url.searchParams.set(key, '[filtered]')
+        hasSensitive = true
+      }
+    }
+
+    if (url.hash && (url.hash.includes('=') || url.hash.includes('&'))) {
+      const lowerHash = url.hash.toLowerCase()
+      if (sensitiveKeys.some((sk) => lowerHash.includes(sk))) {
+        const pattern = new RegExp(
+          `([?&#][^=&#]*?(?:${sensitiveKeys.join('|')})[^=&#]*=)[^&#]*`,
+          'gi',
+        )
+        url.hash = url.hash.replace(pattern, '$1[filtered]')
         hasSensitive = true
       }
     }
 
     if (!hasSensitive) return urlStr
 
+    let result = ''
     if (isSearch) {
-      return '?' + url.searchParams.toString()
+      result = '?' + url.searchParams.toString()
+    } else {
+      result = url.toString()
+
+      // If the original URL was relative, preserve relative path format
+      if (!/^https?:\/\//i.test(urlStr)) {
+        if (result.startsWith('http://dummy.com/')) {
+          const relative = result.substring('http://dummy.com/'.length)
+          result = (urlStr.startsWith('/') ? '/' : '') + relative
+        }
+      }
     }
 
-    const result = url.toString()
-
-    // If the original URL was absolute, return the result
-    if (/^https?:\/\//i.test(urlStr)) {
-      return result
-    }
-
-    // If it was a relative URL, try to preserve the relative-ness
-    if (result.startsWith('http://dummy.com/')) {
-      const relative = result.substring('http://dummy.com/'.length)
-      // If original didn't have a leading slash, and dummy-based URL added one,
-      // we might want to be careful, but usually these are handled fine.
-      return (urlStr.startsWith('/') ? '/' : '') + relative
-    }
-
-    return result
+    return result.replace(/%5Bfiltered%5D/gi, '[filtered]')
   } catch {
     return urlStr
   }

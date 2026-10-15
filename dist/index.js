@@ -75,25 +75,40 @@ function envelopeUrl(project) {
 }
 
 // src/utils.ts
+var sensitiveKeys = [
+  "token",
+  "api_key",
+  "apikey",
+  "auth",
+  "password",
+  "passwd",
+  "secret",
+  "session",
+  "sid",
+  "authorization",
+  "credential",
+  "sig",
+  "signature",
+  "key",
+  "code",
+  "pk",
+  "sk",
+  "jwt",
+  "access_token",
+  "refresh_token",
+  "id_token"
+];
 function scrubUrl(urlStr) {
   if (!urlStr) return "";
   try {
     const isSearch = urlStr.startsWith("?");
     const url = new URL(urlStr, "http://dummy.com");
     let hasSensitive = false;
-    const sensitiveKeys = [
-      "token",
-      "api_key",
-      "apikey",
-      "auth",
-      "password",
-      "passwd",
-      "secret",
-      "session",
-      "sid",
-      "authorization",
-      "credential"
-    ];
+    if (url.username || url.password) {
+      if (url.username) url.username = "[filtered]";
+      if (url.password) url.password = "[filtered]";
+      hasSensitive = true;
+    }
     for (const key of Array.from(url.searchParams.keys())) {
       const lowerKey = key.toLowerCase();
       if (sensitiveKeys.some((sk) => lowerKey.includes(sk))) {
@@ -101,19 +116,31 @@ function scrubUrl(urlStr) {
         hasSensitive = true;
       }
     }
+    if (url.hash && (url.hash.includes("=") || url.hash.includes("&"))) {
+      const lowerHash = url.hash.toLowerCase();
+      if (sensitiveKeys.some((sk) => lowerHash.includes(sk))) {
+        const pattern = new RegExp(
+          `([?&#][^=&#]*?(?:${sensitiveKeys.join("|")})[^=&#]*=)[^&#]*`,
+          "gi"
+        );
+        url.hash = url.hash.replace(pattern, "$1[filtered]");
+        hasSensitive = true;
+      }
+    }
     if (!hasSensitive) return urlStr;
+    let result = "";
     if (isSearch) {
-      return "?" + url.searchParams.toString();
+      result = "?" + url.searchParams.toString();
+    } else {
+      result = url.toString();
+      if (!/^https?:\/\//i.test(urlStr)) {
+        if (result.startsWith("http://dummy.com/")) {
+          const relative = result.substring("http://dummy.com/".length);
+          result = (urlStr.startsWith("/") ? "/" : "") + relative;
+        }
+      }
     }
-    const result = url.toString();
-    if (/^https?:\/\//i.test(urlStr)) {
-      return result;
-    }
-    if (result.startsWith("http://dummy.com/")) {
-      const relative = result.substring("http://dummy.com/".length);
-      return (urlStr.startsWith("/") ? "/" : "") + relative;
-    }
-    return result;
+    return result.replace(/%5Bfiltered%5D/gi, "[filtered]");
   } catch {
     return urlStr;
   }

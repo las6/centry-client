@@ -225,9 +225,9 @@ describe('CentryClient', () => {
       await drain()
 
       const event = await parseEvent(0)
-      expect(event.contexts.page.url).toBe('https://example.com/page?token=%5Bfiltered%5D&user=jules')
-      expect(event.contexts.page['http.query']).toBe('?token=%5Bfiltered%5D&user=jules')
-      expect(event.contexts.page.referer).toBe('https://referrer.com/?api_key=%5Bfiltered%5D')
+      expect(event.contexts.page.url).toBe('https://example.com/page?token=[filtered]&user=jules')
+      expect(event.contexts.page['http.query']).toBe('?token=[filtered]&user=jules')
+      expect(event.contexts.page.referer).toBe('https://referrer.com/?api_key=[filtered]')
 
       // Restore
       window.location = origLocation
