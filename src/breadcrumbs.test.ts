@@ -49,6 +49,24 @@ describe('Breadcrumbs Integration', () => {
     })
   })
 
+  describe('fetch', () => {
+    afterEach(() => { uninstallBreadcrumbs(); vi.restoreAllMocks() })
+
+    it('scrubs fragment auth before recording successful and failed fetches', async () => {
+      const originalFetch = window.fetch
+      const mock = vi.fn().mockResolvedValueOnce(new Response('ok')).mockRejectedValueOnce(new Error('network'))
+      window.fetch = mock
+      try {
+        const buf = installBreadcrumbs()
+        await window.fetch('/items#token=example')
+        await expect(window.fetch('/failed#%74oken=example')).rejects.toThrow('network')
+        const crumbs = buf.snapshot().filter(c => c.category === 'fetch')
+        expect(crumbs.map(c => c.data?.url)).toEqual(['/items#token=%5Bfiltered%5D', '/failed#%74oken=%5Bfiltered%5D'])
+        expect(mock.mock.calls[0][0]).toBe('/items#token=example')
+      } finally { uninstallBreadcrumbs(); window.fetch = originalFetch }
+    })
+  })
+
   describe('console', () => {
     afterEach(() => uninstallBreadcrumbs())
 
@@ -100,6 +118,19 @@ describe('Breadcrumbs Integration', () => {
 
       const crumb = buf.snapshot().find(c => c.category === 'xhr')
       expect(crumb?.data).toEqual({ url: '/api/items', method: 'POST', status_code: 401 })
+    })
+
+    it.each([
+      ['/api/items#%74%6f%6b%65%6e=example', '/api/items#%74%6f%6b%65%6e=%5Bfiltered%5D'],
+      ['//user:example@example.com/api/items', '/api/items'],
+      ['/api/items#/dashboard', '/api/items#/dashboard'],
+    ])('scrubs XHR fragment auth and preserves routes: %s', (input, expected) => {
+      const buf = installBreadcrumbs()
+      const xhr = new FakeXhr() as unknown as XMLHttpRequest
+      xhr.open('GET', input)
+      xhr.send()
+      ;(xhr as unknown as FakeXhr).emit('loadend')
+      expect(buf.snapshot().find(c => c.category === 'xhr')?.data?.url).toBe(expected)
     })
 
     it('marks network failures (status 0) as error level', () => {

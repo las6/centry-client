@@ -217,7 +217,7 @@ describe('CentryClient', () => {
 
       // Use Object.defineProperty because window.location is often read-only in test environments
       delete (window as any).location
-      window.location = new URL('https://example.com/page?token=secret&user=jules') as any
+      window.location = new URL('https://user:example@example.com/page?token=secret&user=jules#%74oken=example') as any
       Object.defineProperty(document, 'referrer', { value: 'https://referrer.com/?api_key=123', configurable: true })
 
       const client = new CentryClient({ project: 'p' })
@@ -225,7 +225,7 @@ describe('CentryClient', () => {
       await drain()
 
       const event = await parseEvent(0)
-      expect(event.contexts.page.url).toBe('https://example.com/page?token=%5Bfiltered%5D&user=jules')
+      expect(event.contexts.page.url).toBe('https://%5Bfiltered%5D@example.com/page?token=%5Bfiltered%5D&user=jules#%74oken=%5Bfiltered%5D')
       expect(event.contexts.page['http.query']).toBe('?token=%5Bfiltered%5D&user=jules')
       expect(event.contexts.page.referer).toBe('https://referrer.com/?api_key=%5Bfiltered%5D')
 

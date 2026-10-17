@@ -162,7 +162,7 @@ describe('NodeClient', () => {
     it('attaches IncomingMessage-style context when passed explicitly', async () => {
       const req = {
         method: 'GET',
-        url: '/api/notes?token=secret',
+        url: '/api/notes?token=secret#%74oken=example',
         headers: {
           'user-agent': 'node-fetch/1.0',
           'x-forwarded-for': '1.2.3.4',
@@ -176,7 +176,7 @@ describe('NodeClient', () => {
       const event = parsedEvent(fetchCalls()[0].body)
       const reqCtx = event.request as Record<string, unknown>
       expect(reqCtx.method).toBe('GET')
-      expect(reqCtx.url).toBe('/api/notes?token=%5Bfiltered%5D')
+      expect(reqCtx.url).toBe('/api/notes?token=%5Bfiltered%5D#%74oken=%5Bfiltered%5D')
       const headers = reqCtx.headers as Record<string, string>
       expect(headers['user-agent']).toBe('node-fetch/1.0')
       expect(headers['x-forwarded-for']).toBe('1.2.3.4')

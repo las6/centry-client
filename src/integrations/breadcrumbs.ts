@@ -48,7 +48,7 @@ function now(): string {
 
 /** Strip origin and query so breadcrumb URLs stay concise and privacy-safe. */
 function normalizeBreadcrumbUrl(url: string): string {
-  return url.replace(/^https?:\/\/[^/]+/, '').replace(/\?.*$/, '') || '/'
+  return scrubUrl(url).replace(/^(?:https?:)?\/\/[^/?#]+/i, '').replace(/\?.*$/, '') || '/'
 }
 
 /** Serialize a console argument without losing Error details to `{}`. */

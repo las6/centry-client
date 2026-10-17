@@ -43,48 +43,51 @@ function envelopeUrl(project) {
 }
 
 // src/utils.ts
+var sensitiveParts = [
+  "token",
+  "api_key",
+  "apikey",
+  "auth",
+  "password",
+  "passwd",
+  "secret",
+  "session",
+  "sid",
+  "authorization",
+  "credential"
+];
+var sensitiveExact = /* @__PURE__ */ new Set(["jwt", "sig", "signature", "key", "code", "pk", "sk"]);
+function scrubParams(params) {
+  return params.split("&").map((part) => {
+    const equals = part.indexOf("=");
+    if (equals < 0) return part;
+    const key = new URLSearchParams(part.slice(0, equals) + "=").keys().next().value?.toLowerCase() ?? "";
+    if (sensitiveExact.has(key) || sensitiveParts.some((name) => key.includes(name))) {
+      return part.slice(0, equals + 1) + "%5Bfiltered%5D";
+    }
+    return part;
+  }).join("&");
+}
 function scrubUrl(urlStr) {
   if (!urlStr) return "";
-  try {
-    const isSearch = urlStr.startsWith("?");
-    const url = new URL(urlStr, "http://dummy.com");
-    let hasSensitive = false;
-    const sensitiveKeys = [
-      "token",
-      "api_key",
-      "apikey",
-      "auth",
-      "password",
-      "passwd",
-      "secret",
-      "session",
-      "sid",
-      "authorization",
-      "credential"
-    ];
-    for (const key of Array.from(url.searchParams.keys())) {
-      const lowerKey = key.toLowerCase();
-      if (sensitiveKeys.some((sk) => lowerKey.includes(sk))) {
-        url.searchParams.set(key, "[filtered]");
-        hasSensitive = true;
-      }
-    }
-    if (!hasSensitive) return urlStr;
-    if (isSearch) {
-      return "?" + url.searchParams.toString();
-    }
-    const result = url.toString();
-    if (/^https?:\/\//i.test(urlStr)) {
-      return result;
-    }
-    if (result.startsWith("http://dummy.com/")) {
-      const relative = result.substring("http://dummy.com/".length);
-      return (urlStr.startsWith("/") ? "/" : "") + relative;
-    }
-    return result;
-  } catch {
-    return urlStr;
+  const credentialsScrubbed = urlStr.replace(
+    /^([a-z][a-z\d+.-]*:)?\/\/([^/?#]*@)/i,
+    (_match, scheme) => `${scheme ?? ""}//%5Bfiltered%5D@`
+  );
+  const hashIndex = credentialsScrubbed.indexOf("#");
+  const beforeHash = hashIndex < 0 ? credentialsScrubbed : credentialsScrubbed.slice(0, hashIndex);
+  const queryIndex = beforeHash.indexOf("?");
+  const base = queryIndex < 0 ? beforeHash : beforeHash.slice(0, queryIndex + 1) + scrubParams(beforeHash.slice(queryIndex + 1));
+  if (hashIndex < 0) return base;
+  const fragment = credentialsScrubbed.slice(hashIndex + 1);
+  const fragmentQuery = fragment.indexOf("?");
+  if (fragmentQuery >= 0) {
+    return base + "#" + fragment.slice(0, fragmentQuery + 1) + scrubParams(fragment.slice(fragmentQuery + 1));
   }
+  if (!fragment.startsWith("/") && fragment.includes("=")) {
+    return base + "#" + scrubParams(fragment);
+  }
+  return base + "#" + fragment;
 }
 
 // src/_shared/envelope.ts
@@ -516,7 +519,7 @@ function now() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
 function normalizeBreadcrumbUrl(url) {
-  return url.replace(/^https?:\/\/[^/]+/, "").replace(/\?.*$/, "") || "/";
+  return scrubUrl(url).replace(/^(?:https?:)?\/\/[^/?#]+/i, "").replace(/\?.*$/, "") || "/";
 }
 function formatConsoleArg(value) {
   if (typeof value === "string") return value;

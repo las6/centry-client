@@ -158,7 +158,7 @@ describe('WorkerClient', () => {
         method: 'GET',
         url: '/v1/user',
         headers: {
-          'referer': 'https://dashboard.example.com/reset?token=secret&tab=security',
+          'referer': 'https://user:example@dashboard.example.com/reset?token=secret&tab=security#access_token=example',
         },
       }
       client.captureException(new Error('test'), req)
@@ -166,7 +166,7 @@ describe('WorkerClient', () => {
 
       const event = JSON.parse(fetchCalls()[0].body.split('\n')[2])
       const headers = (event.request as Record<string, unknown>).headers as Record<string, string>
-      expect(headers['referer']).toBe('https://dashboard.example.com/reset?token=%5Bfiltered%5D&tab=security')
+      expect(headers['referer']).toBe('https://%5Bfiltered%5D@dashboard.example.com/reset?token=%5Bfiltered%5D&tab=security#access_token=%5Bfiltered%5D')
     })
   })
 
