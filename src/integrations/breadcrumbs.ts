@@ -3,7 +3,6 @@
 // ring-buffer of breadcrumbs. The buffer is snapshotted into each captured
 // event so the trail of activity leading up to the error is preserved.
 
-import { scrubUrl } from '../utils'
 
 export interface Breadcrumb {
   timestamp: string
@@ -44,11 +43,6 @@ let _cleanupFns: Array<() => void> = []
 
 function now(): string {
   return new Date().toISOString()
-}
-
-/** Strip origin and query so breadcrumb URLs stay concise and privacy-safe. */
-function normalizeBreadcrumbUrl(url: string): string {
-  return url.replace(/^https?:\/\/[^/]+/, '').replace(/\?.*$/, '') || '/'
 }
 
 /** Serialize a console argument without losing Error details to `{}`. */
@@ -119,8 +113,8 @@ function installNavigationInterceptors(buf: BreadcrumbBuffer): () => void {
         type: 'navigation',
         category: 'navigation',
         data: {
-          from: scrubUrl(currentUrl.replace(window.location.origin, '') || '/'),
-          to: scrubUrl(to.startsWith('http') ? to.replace(window.location.origin, '') : to),
+          from: currentUrl,
+          to: to,
         },
       })
       currentUrl = window.location.href
@@ -176,8 +170,6 @@ function installFetchInterceptor(buf: BreadcrumbBuffer): () => void {
         url = input.url
         method = (input.method ?? method).toUpperCase()
       }
-      // Strip origin + query to keep breadcrumbs concise and privacy-safe
-      url = normalizeBreadcrumbUrl(url)
     } catch {
       url = '(unknown)'
     }
@@ -233,7 +225,7 @@ function installXhrInterceptor(buf: BreadcrumbBuffer): () => void {
     try {
       meta.set(this, {
         method: String(method).toUpperCase(),
-        url: normalizeBreadcrumbUrl(String(url)),
+        url: String(url),
       })
     } catch { /* never throw */ }
     return originalOpen.apply(this, [method, url, ...rest])

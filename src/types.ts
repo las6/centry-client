@@ -8,7 +8,13 @@ export type SendErrorReason =
   | 'network_error'
   | 'send_failed'
 
+export type CentryEvent = Record<string, unknown>
+
 export interface CentryConfig {
+  /** Optional self-hosted Centry base URL. */
+  host?: string
+  /** Synchronous event transform before sizing/transmission. Return null to drop. */
+  beforeSend?: (event: CentryEvent) => CentryEvent | null
   project: string
   environment?: string
   release?: string
@@ -24,6 +30,6 @@ export interface CentryConfig {
   onSendError?: (error: Error, payloadSize: number, reason?: SendErrorReason) => void
 }
 
-export function envelopeUrl(project: string): string {
-  return `${CENTRY_HOST}/api/${project}/envelope/`
+export function envelopeUrl(project: string, host = CENTRY_HOST): string {
+  return `${host.replace(/\/$/, '')}/api/${encodeURIComponent(project)}/envelope/`
 }

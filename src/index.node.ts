@@ -8,4 +8,4 @@ export {
   withCentry,
   installNodeGlobalHandlers,
 } from './node'
-export type { CentryConfig } from './types'
+export type { CentryConfig, CentryEvent } from './types'

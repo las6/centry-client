@@ -42,7 +42,7 @@ function sanitizeValue(value: unknown, maxBytes: number, depth = 0): unknown {
   if (typeof value === 'number' || typeof value === 'boolean' || value == null) return value
 
   if (Array.isArray(value)) {
-    if (depth >= MAX_OBJECT_DEPTH) return value.slice(0, MAX_ARRAY_ITEMS).map((item) => sanitizeValue(item, maxBytes, depth + 1))
+    if (depth >= MAX_OBJECT_DEPTH) return []
     return value.slice(0, MAX_ARRAY_ITEMS).map((item) => sanitizeValue(item, maxBytes, depth + 1))
   }
 
@@ -100,7 +100,7 @@ function trimBreadcrumbs(event: Record<string, unknown>, dropped: Set<string>): 
   breadcrumbs.values = breadcrumbs.values.map((crumb) => {
     const next = cloneEvent(crumb)
     if (typeof next.message === 'string') next.message = truncateString(next.message, 256)
-    if (next.data && typeof next.data === 'object') next.data = sanitizeValue(next.data, 256)
+    if (next.data && typeof next.data === 'object') next.data = sanitizeValue(next.data, MAX_URL_BYTES)
     if (typeof next.category === 'string') next.category = truncateString(next.category, 128)
     if (typeof next.type === 'string') next.type = truncateString(next.type, 64)
     if (typeof next.level === 'string') next.level = truncateString(next.level, 32)
@@ -121,6 +121,10 @@ function sanitizeTopLevel(event: Record<string, unknown>, dropped: Set<string>):
   if (typeof event.environment === 'string') event.environment = truncateString(event.environment, 64)
 
   const exceptionValues = (((event.exception as Record<string, unknown> | undefined)?.values) ?? []) as Array<Record<string, unknown>>
+  if (exceptionValues.length > 5) {
+    exceptionValues.splice(1, exceptionValues.length - 5)
+    dropped.add('cause_chain')
+  }
   for (const exc of exceptionValues) {
     if (typeof exc.type === 'string') exc.type = truncateString(exc.type, 128)
     if (typeof exc.value === 'string') exc.value = truncateString(exc.value, MAX_STRING_BYTES)
@@ -143,8 +147,8 @@ function sanitizeTopLevel(event: Record<string, unknown>, dropped: Set<string>):
   }
 
   if (event.user) event.user = sanitizeValue(event.user, 256)
-  if (event.request) event.request = sanitizeValue(event.request, 256)
-  if (event.contexts) event.contexts = sanitizeValue(event.contexts, 256)
+  if (event.request) event.request = sanitizeValue(event.request, MAX_URL_BYTES)
+  if (event.contexts) event.contexts = sanitizeValue(event.contexts, MAX_URL_BYTES)
 }
 
 function attachTrimMetadata(
@@ -187,6 +191,15 @@ function shrinkForBudget(event: Record<string, unknown>, dropped: Set<string>): 
     }
   }
 
+  // Keep the primary and deepest retained cause, discarding intermediate stacks first.
+  if (exceptionValues.length > 2) {
+    exceptionValues.splice(1, exceptionValues.length - 2)
+    dropped.add('cause_chain')
+  }
+  for (const exc of exceptionValues.slice(0, -1)) {
+    delete exc.stacktrace
+    dropped.add('cause_frames')
+  }
   delete event.extra
   delete event.user
   delete event.request
@@ -227,7 +240,7 @@ export function prepareBrowserEventForTransport(event: Record<string, unknown>):
   }
 
   const header = JSON.stringify({ sent_at: new Date().toISOString() })
-  const itemHeader = JSON.stringify({ type: 'event', length: eventJson.length })
+  const itemHeader = JSON.stringify({ type: 'event', length: byteSize(eventJson) })
   const envelopeSize = byteSize(`${header}\n${itemHeader}\n${eventJson}\n`)
 
   if (envelopeSize > MAX_ENVELOPE_BYTES) {

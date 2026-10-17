@@ -1,5 +1,10 @@
 type SendErrorReason = 'payload_too_large' | 'http_error' | 'network_error' | 'send_failed';
+type CentryEvent = Record<string, unknown>;
 interface CentryConfig {
+    /** Optional self-hosted Centry base URL. */
+    host?: string;
+    /** Synchronous event transform before sizing/transmission. Return null to drop. */
+    beforeSend?: (event: CentryEvent) => CentryEvent | null;
     project: string;
     environment?: string;
     release?: string;
@@ -112,4 +117,4 @@ declare function getNodeClient(): NodeClient | null;
  */
 declare function withCentry<TArgs extends unknown[], TReturn>(config: CentryConfig, handler: (...args: TArgs) => TReturn | Promise<TReturn>): (...args: TArgs) => Promise<Awaited<TReturn>>;
 
-export { type CentryConfig, NodeClient, captureException, captureMessage, getNodeClient, initNode, installNodeGlobalHandlers, withCentry };
+export { type CentryConfig, type CentryEvent, NodeClient, captureException, captureMessage, getNodeClient, initNode, installNodeGlobalHandlers, withCentry };

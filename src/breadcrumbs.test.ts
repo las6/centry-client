@@ -30,7 +30,7 @@ describe('Breadcrumbs Integration', () => {
       vi.restoreAllMocks()
     })
 
-    it('redacts sensitive information in navigation breadcrumbs', () => {
+    it('preserves navigation URL context for server filtering', () => {
       // Set initial URL with sensitive info BEFORE installing breadcrumbs
       window.location = new URL('https://example.com/start?token=secret1') as any
 
@@ -43,9 +43,9 @@ describe('Breadcrumbs Integration', () => {
       const navCrumb = crumbs.find(c => c.type === 'navigation')
 
       expect(navCrumb).toBeDefined()
-      // We WANT these to be filtered. Note: URLSearchParams.toString() URL-encodes brackets
-      expect(navCrumb?.data?.from).toBe('/start?token=%5Bfiltered%5D')
-      expect(navCrumb?.data?.to).toBe('/target?api_key=%5Bfiltered%5D')
+      // The ingest server owns automatic credential filtering.
+      expect(navCrumb?.data?.from).toBe('https://example.com/start?token=secret1')
+      expect(navCrumb?.data?.to).toBe('/target?api_key=secret2')
     })
   })
 
@@ -90,7 +90,7 @@ describe('Breadcrumbs Integration', () => {
       ;(window as any).XMLHttpRequest = originalXhr
     })
 
-    it('records method, scrubbed url, and status on loadend', () => {
+    it('records method, full URL, and status on loadend', () => {
       const buf = installBreadcrumbs()
       const xhr = new FakeXhr() as unknown as XMLHttpRequest
       xhr.open('POST', 'https://example.com/api/items?token=secret')
@@ -99,7 +99,7 @@ describe('Breadcrumbs Integration', () => {
       ;(xhr as unknown as FakeXhr).emit('loadend')
 
       const crumb = buf.snapshot().find(c => c.category === 'xhr')
-      expect(crumb?.data).toEqual({ url: '/api/items', method: 'POST', status_code: 401 })
+      expect(crumb?.data).toEqual({ url: 'https://example.com/api/items?token=secret', method: 'POST', status_code: 401 })
     })
 
     it('marks network failures (status 0) as error level', () => {

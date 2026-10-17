@@ -8,7 +8,7 @@ export function toError(value: unknown): Error | null {
     typeof value === 'string'
       ? value
       : typeof value === 'object'
-        ? String((value as Record<string, unknown>).message || JSON.stringify(value))
+        ? String((value as Record<string, unknown>).message || safeStringify(value))
         : String(value)
   const err = new Error(msg)
   err.name =
@@ -16,4 +16,8 @@ export function toError(value: unknown): Error | null {
       ? String((value as Record<string, unknown>).name)
       : 'UnknownError'
   return err
+}
+
+function safeStringify(value: unknown): string {
+  try { return JSON.stringify(value) ?? String(value) } catch { return '[Unserializable thrown value]' }
 }

@@ -7,7 +7,8 @@
 //   - getStore()     — ALS lookup (platform-specific)
 //   - runtimeContext — { name, version? } for contexts.runtime
 
-import { parseStack } from '../stackParser'
+import { buildExceptionValues } from './exceptionValues'
+import { prepareBrowserEventForTransport } from './browserEventPayload'
 import type { CentryConfig } from '../types'
 import { envelopeUrl } from '../types'
 import { buildEnvelope } from './envelope'
@@ -24,7 +25,7 @@ export abstract class BaseServerClient {
 
   constructor(config: CentryConfig) {
     this.config = config
-    this.url = envelopeUrl(config.project)
+    this.url = envelopeUrl(config.project, config.host)
     this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 60_000)
   }
 
@@ -84,7 +85,7 @@ export abstract class BaseServerClient {
       // Rate limit
       if (!this.rateLimiter.allow()) return
 
-      const frames = err.stack ? parseStack(err.stack) : []
+      const chain = buildExceptionValues(error, handled)
 
       const event: Record<string, unknown> = {
         event_id: crypto.randomUUID().replace(/-/g, ''),
@@ -92,16 +93,8 @@ export abstract class BaseServerClient {
         level: 'error',
         environment: this.config.environment,
         release: this.config.release,
-        exception: {
-          values: [
-            {
-              type: err.name || 'Error',
-              value: err.message,
-              mechanism: { type: handled ? 'generic' : 'onerror', handled },
-              stacktrace: { frames },
-            },
-          ],
-        },
+        exception: { values: chain.values },
+        ...(chain.truncated ? { debug_meta: { centry: { cause_chain_truncated: true } } } : {}),
         contexts: {
           runtime: this.runtimeContext,
         },
@@ -153,15 +146,26 @@ export abstract class BaseServerClient {
 
   protected _send(event: Record<string, unknown>): void {
     try {
-      const envelope = buildEnvelope(event)
+      const filtered = this.config.beforeSend ? this.config.beforeSend(event) : event
+      if (!filtered || typeof filtered !== 'object' || Array.isArray(filtered) || typeof filtered.then === 'function') return
+      const prepared = prepareBrowserEventForTransport(filtered)
+      if (!prepared.event) {
+        this.config.onSendError?.(new Error('Event exceeded transport budget'), prepared.originalSize, 'payload_too_large')
+        return
+      }
+      const envelope = buildEnvelope(prepared.event)
       // Track the promise so flush() can await it
       const p: Promise<void> = fetch(this.url, {
         method: 'POST',
         body: envelope,
         headers: { 'Content-Type': 'text/plain' },
       })
-        .then(() => {})
-        .catch(() => {})
+        .then((response) => {
+          if (!response.ok) this.config.onSendError?.(new Error(`Ingest responded with HTTP ${response.status}`), prepared.envelopeSize, 'http_error')
+        })
+        .catch(() => {
+          try { this.config.onSendError?.(new Error('Event transport failed'), prepared.envelopeSize, 'network_error') } catch { /* reporting must not throw */ }
+        })
         .finally(() => this._pending.delete(p))
       this._pending.add(p)
     } catch {

@@ -7,4 +7,4 @@ export {
   getWorkerClient,
   withCentry,
 } from './worker'
-export type { CentryConfig } from './types'
+export type { CentryConfig, CentryEvent } from './types'

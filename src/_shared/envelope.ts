@@ -7,6 +7,6 @@
 export function buildEnvelope(event: Record<string, unknown>): string {
   const eventJson = JSON.stringify(event)
   const header = JSON.stringify({ sent_at: new Date().toISOString() })
-  const itemHeader = JSON.stringify({ type: 'event', length: eventJson.length })
+  const itemHeader = JSON.stringify({ type: 'event', length: new TextEncoder().encode(eventJson).byteLength })
   return `${header}\n${itemHeader}\n${eventJson}\n`
 }
