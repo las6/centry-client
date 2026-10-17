@@ -1,7 +1,7 @@
 import { parseStack } from './stackParser'
 import type { CentryConfig, SendErrorReason } from './types'
 import { envelopeUrl } from './types'
-import { scrubUrl } from './utils'
+import { buildExceptionValues } from './_shared/exceptionValues'
 import { buildEnvelope } from './_shared/envelope'
 import { prepareBrowserEventForTransport } from './_shared/browserEventPayload'
 import { enrichTopFrameWithContext } from './_shared/sourceContext'
@@ -104,7 +104,7 @@ export class CentryClient {
       ...config,
       environment: config.environment ?? import.meta.env?.MODE ?? 'production',
     }
-    this.url = envelopeUrl(config.project)
+    this.url = envelopeUrl(config.project, config.host)
     this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 60_000)
     // Install breadcrumb interceptors (console, navigation, fetch)
     if (typeof window !== 'undefined' && config.enabled !== false) {
@@ -179,6 +179,8 @@ export class CentryClient {
       // Rate limit — hard cap per minute, protects against runaway loops
       if (!this.rateLimiter.allow()) return
 
+      const chain = buildExceptionValues(error, handled)
+      if (chain.values.length) chain.values[chain.values.length - 1].stacktrace.frames = enrichedFrames
       const { browser, os } = parseUa()
 
       const event: Record<string, unknown> = {
@@ -188,21 +190,15 @@ export class CentryClient {
         environment: this.config.environment,
         release: this.config.release,
         breadcrumbs: { values: getBreadcrumbBuffer()?.snapshot() ?? [] },
-        exception: {
-          values: [{
-            type: err.name || 'Error',
-            value: err.message,
-            mechanism: { type: handled ? 'generic' : 'onerror', handled },
-            stacktrace: { frames: enrichedFrames },
-          }],
-        },
+        exception: { values: chain.values },
+        ...(chain.truncated ? { debug_meta: { centry: { cause_chain_truncated: true } } } : {}),
         contexts: {
           browser,
           os,
           page: {
-            url: scrubUrl(location.href),
-            'http.query': scrubUrl(location.search),
-            referer: scrubUrl(document.referrer),
+            url: location.href,
+            'http.query': location.search,
+            referer: document.referrer,
           },
           runtime: { name: 'javascript' },
         },
@@ -241,9 +237,9 @@ export class CentryClient {
           browser,
           os,
           page: {
-            url: scrubUrl(location.href),
-            'http.query': scrubUrl(location.search),
-            referer: scrubUrl(document.referrer),
+            url: location.href,
+            'http.query': location.search,
+            referer: document.referrer,
           },
           runtime: { name: 'javascript' },
         },
@@ -257,7 +253,9 @@ export class CentryClient {
 
   private send(event: Record<string, unknown>): void {
     try {
-      const prepared = prepareBrowserEventForTransport(event)
+      const filtered = this.config.beforeSend ? this.config.beforeSend(event) : event
+      if (!filtered || typeof filtered !== 'object' || Array.isArray(filtered) || typeof filtered.then === 'function') return
+      const prepared = prepareBrowserEventForTransport(filtered)
       if (!prepared.event) {
         this.reportSendError(new Error('Event exceeded browser transport budget'), prepared.originalSize, 'payload_too_large')
         return

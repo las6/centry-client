@@ -1,7 +1,12 @@
 import { ReactNode } from 'react';
 
 type SendErrorReason = 'payload_too_large' | 'http_error' | 'network_error' | 'send_failed';
+type CentryEvent = Record<string, unknown>;
 interface CentryConfig {
+    /** Optional self-hosted Centry base URL. */
+    host?: string;
+    /** Synchronous event transform before sizing/transmission. Return null to drop. */
+    beforeSend?: (event: CentryEvent) => CentryEvent | null;
     project: string;
     environment?: string;
     release?: string;
@@ -106,4 +111,4 @@ declare function getClient(): CentryClient | null;
  */
 declare function installGlobalHandlers(client: CentryClient): () => void;
 
-export { CentryClient, type CentryConfig, CentryProvider, type SendErrorReason, captureException, captureMessage, getClient, init, installGlobalHandlers };
+export { CentryClient, type CentryConfig, type CentryEvent, CentryProvider, type SendErrorReason, captureException, captureMessage, getClient, init, installGlobalHandlers };

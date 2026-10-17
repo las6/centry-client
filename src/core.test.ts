@@ -210,7 +210,7 @@ describe('CentryClient', () => {
       expect(vi.mocked(navigator.sendBeacon).mock.calls).toHaveLength(0)
     })
 
-    it('scrubs sensitive query parameters from URLs', async () => {
+    it('preserves URL context for server filtering', async () => {
       // Mock location and document.referrer
       const origLocation = window.location
       const origReferrer = document.referrer
@@ -225,9 +225,9 @@ describe('CentryClient', () => {
       await drain()
 
       const event = await parseEvent(0)
-      expect(event.contexts.page.url).toBe('https://example.com/page?token=%5Bfiltered%5D&user=jules')
-      expect(event.contexts.page['http.query']).toBe('?token=%5Bfiltered%5D&user=jules')
-      expect(event.contexts.page.referer).toBe('https://referrer.com/?api_key=%5Bfiltered%5D')
+      expect(event.contexts.page.url).toBe('https://example.com/page?token=secret&user=jules')
+      expect(event.contexts.page['http.query']).toBe('?token=secret&user=jules')
+      expect(event.contexts.page.referer).toBe('https://referrer.com/?api_key=123')
 
       // Restore
       window.location = origLocation
@@ -345,5 +345,25 @@ describe('module-level singleton', () => {
     expect(calls).toHaveLength(2)
     expect(calls[0].url).toContain('/api/manual-app/envelope/')
     expect(calls[1].url).toContain('/api/reinit-app/envelope/')
+  })
+})
+
+
+describe('browser diagnostic contract', () => {
+  beforeEach(() => setupMocks())
+  afterEach(() => vi.restoreAllMocks())
+  it('passes causes through the hook before bounding and sending', async () => {
+    const client = new CentryClient({ project: 'p', host: 'https://self.test', beforeSend: event => ({ ...event, tags: { test: 'yes' } }) })
+    client.captureException(new Error('outer', { cause: new Error('root') }))
+    await drain()
+    const event = await parseEvent(0)
+    expect(event.exception).toMatchObject({ values: [{ value: 'root' }, { value: 'outer' }] })
+    expect(event.tags).toEqual({ test: 'yes' })
+    expect((await getCalls())[0].url).toBe('https://self.test/api/p/envelope/')
+  })
+  it('does not transmit an event dropped by the hook', async () => {
+    const client = new CentryClient({ project: 'p', beforeSend: () => null })
+    client.captureMessage('drop'); await drain()
+    expect(await getCalls()).toHaveLength(0)
   })
 })

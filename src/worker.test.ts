@@ -26,6 +26,32 @@ describe('WorkerClient', () => {
     vi.useRealTimers()
   })
 
+  it('captures causes and runs the hook before sizing on a self-hosted endpoint', async () => {
+    const hook = vi.fn((event) => ({ ...event, tags: { operation: 'save' } }))
+    const configured = new WorkerClient({ project: 'test-project', host: 'https://self.test/', beforeSend: hook })
+    configured.captureException(new Error('outer', { cause: new Error('root') }))
+    await configured.flush()
+    const calls = fetchCalls()
+    expect(calls[0].url).toBe('https://self.test/api/test-project/envelope/')
+    const event = JSON.parse(calls[0].body.split('\n')[2])
+    expect(event.exception.values.map((value: { value: string }) => value.value)).toEqual(['root', 'outer'])
+    expect(event.tags.operation).toBe('save')
+    expect(hook).toHaveBeenCalledOnce()
+  })
+
+  it('drops hook-rejected events and contains hook/transport failures', async () => {
+    const drop = new WorkerClient({ project: 'test-project', beforeSend: () => null })
+    drop.captureMessage('drop'); await drop.flush()
+    const fail = new WorkerClient({ project: 'test-project', beforeSend: () => { throw Error('hook') } })
+    fail.captureMessage('fail'); await fail.flush()
+    expect(fetchCalls()).toHaveLength(0)
+    const report = vi.fn()
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('', { status: 413 }))
+    const offline = new WorkerClient({ project: 'test-project', onSendError: report })
+    offline.captureMessage('offline'); await offline.flush()
+    expect(report).toHaveBeenCalledWith(expect.any(Error), expect.any(Number), 'http_error')
+  })
+
   describe('event capture', () => {
     it('sends event to the correct envelope URL', async () => {
       client.captureException(new Error('worker error'))
@@ -144,16 +170,16 @@ describe('WorkerClient', () => {
       expect(headers['cookie']).toBeUndefined()
     })
 
-    it('scrubs sensitive query parameters from the URL', async () => {
+    it('preserves request URLs for server filtering', async () => {
       const req = new Request('https://api.example.com/v1/user?token=secret&api_key=123')
       client.captureException(new Error('test'), req)
       await vi.runAllTimersAsync()
 
       const event = JSON.parse(fetchCalls()[0].body.split('\n')[2])
-      expect(event.request.url).toBe('https://api.example.com/v1/user?token=%5Bfiltered%5D&api_key=%5Bfiltered%5D')
+      expect(event.request.url).toBe('https://api.example.com/v1/user?token=secret&api_key=123')
     })
 
-    it('keeps referer but scrubs sensitive query parameters from it', async () => {
+    it('preserves referer for server filtering', async () => {
       const req = {
         method: 'GET',
         url: '/v1/user',
@@ -166,7 +192,7 @@ describe('WorkerClient', () => {
 
       const event = JSON.parse(fetchCalls()[0].body.split('\n')[2])
       const headers = (event.request as Record<string, unknown>).headers as Record<string, string>
-      expect(headers['referer']).toBe('https://dashboard.example.com/reset?token=%5Bfiltered%5D&tab=security')
+      expect(headers['referer']).toBe('https://dashboard.example.com/reset?token=secret&tab=security')
     })
   })
 

@@ -199,3 +199,41 @@ Most options apply to all three targets (`init()`, `initWorker()`, `initNode()`,
 | `maxEventsPerMinute` | `number` | `10` | Hard cap on errors sent per 60-second window |
 | `dedupWindowMs` | `number` | `10000` | Suppress duplicate errors for this duration (ms) |
 | `onSendError` | `(error, payloadSize, reason) => void` | `undefined` | Called when the SDK drops an event or transport fails |
+
+## Diagnostic context and privacy (1.4)
+
+URL context is preserved by the SDK, including ordinary query values and HTTP
+breadcrumb origins. Shared credential filtering happens in the Centry ingest
+server before storage, notifications and exports. Upgrade self-hosted ingest
+servers to the credentials-v1 policy before adopting 1.4; old server versions do
+not supply this protection. Existing clients continue to work with the new server.
+
+This is not comprehensive secret detection. Error messages, stack source text,
+and arbitrary strings may contain sensitive data. To remove application-specific
+data before it leaves the application, use the synchronous `beforeSend` callback
+on browser, Node or Worker configuration. Return the event to send it or `null` to
+drop it. A throwing callback drops the event and does not break the application.
+Do not return a Promise. The callback receives the event with its causes and
+breadcrumbs, before the final transport-size checks.
+
+```ts
+init({
+  project: 'my-project',
+  host: 'https://centry.example.com', // optional, defaults to centry.pages.dev
+  beforeSend(event) {
+    delete event.user
+    return event
+  },
+})
+```
+
+All JS targets capture up to five exception values, primary last. Cycles/deeper
+chains are marked in event metadata. They share a 48 KiB event / 60 KiB envelope
+budget. Stack frames, strings and breadcrumbs are bounded; under pressure,
+intermediate causes and cause stacks are trimmed before sacrificing the primary
+error. Metadata identifies trimming. Unsendable events are dropped and reported
+through `onSendError`; Node/Worker HTTP and network failures also use that hook.
+Request capture still uses a header allowlist and does not automatically collect
+Authorization/Cookie headers or request bodies. Server-side filtering does not
+prevent data from reaching the ingest endpoint; use `beforeSend` when that is
+required. Application grouping and short-window dedup semantics are unchanged.

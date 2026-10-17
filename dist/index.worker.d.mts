@@ -1,5 +1,10 @@
 type SendErrorReason = 'payload_too_large' | 'http_error' | 'network_error' | 'send_failed';
+type CentryEvent = Record<string, unknown>;
 interface CentryConfig {
+    /** Optional self-hosted Centry base URL. */
+    host?: string;
+    /** Synchronous event transform before sizing/transmission. Return null to drop. */
+    beforeSend?: (event: CentryEvent) => CentryEvent | null;
     project: string;
     environment?: string;
     release?: string;
@@ -106,4 +111,4 @@ type WorkerHandler = ExportedHandler<Record<string, unknown>>;
  */
 declare function withCentry(config: CentryConfig, handler: WorkerHandler): WorkerHandler;
 
-export { type CentryConfig, WorkerClient, captureWorkerException, captureWorkerMessage, getWorkerClient, initWorker, withCentry };
+export { type CentryConfig, type CentryEvent, WorkerClient, captureWorkerException, captureWorkerMessage, getWorkerClient, initWorker, withCentry };

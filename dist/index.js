@@ -70,60 +70,63 @@ function parseStack(stack) {
 
 // src/types.ts
 var CENTRY_HOST = "https://centry.pages.dev";
-function envelopeUrl(project) {
-  return `${CENTRY_HOST}/api/${project}/envelope/`;
+function envelopeUrl(project, host = CENTRY_HOST) {
+  return `${host.replace(/\/$/, "")}/api/${encodeURIComponent(project)}/envelope/`;
 }
 
-// src/utils.ts
-function scrubUrl(urlStr) {
-  if (!urlStr) return "";
+// src/_shared/toError.ts
+function toError(value) {
+  if (value instanceof Error) return value;
+  if (value === null || value === void 0) return null;
+  const msg = typeof value === "string" ? value : typeof value === "object" ? String(value.message || safeStringify(value)) : String(value);
+  const err = new Error(msg);
+  err.name = typeof value === "object" && value.name ? String(value.name) : "UnknownError";
+  return err;
+}
+function safeStringify(value) {
   try {
-    const isSearch = urlStr.startsWith("?");
-    const url = new URL(urlStr, "http://dummy.com");
-    let hasSensitive = false;
-    const sensitiveKeys = [
-      "token",
-      "api_key",
-      "apikey",
-      "auth",
-      "password",
-      "passwd",
-      "secret",
-      "session",
-      "sid",
-      "authorization",
-      "credential"
-    ];
-    for (const key of Array.from(url.searchParams.keys())) {
-      const lowerKey = key.toLowerCase();
-      if (sensitiveKeys.some((sk) => lowerKey.includes(sk))) {
-        url.searchParams.set(key, "[filtered]");
-        hasSensitive = true;
-      }
-    }
-    if (!hasSensitive) return urlStr;
-    if (isSearch) {
-      return "?" + url.searchParams.toString();
-    }
-    const result = url.toString();
-    if (/^https?:\/\//i.test(urlStr)) {
-      return result;
-    }
-    if (result.startsWith("http://dummy.com/")) {
-      const relative = result.substring("http://dummy.com/".length);
-      return (urlStr.startsWith("/") ? "/" : "") + relative;
-    }
-    return result;
+    return JSON.stringify(value) ?? String(value);
   } catch {
-    return urlStr;
+    return "[Unserializable thrown value]";
   }
+}
+
+// src/_shared/exceptionValues.ts
+function buildExceptionValues(error, handled) {
+  const values = [];
+  const seen = /* @__PURE__ */ new Set();
+  let current = error;
+  let truncated = false;
+  while (current != null) {
+    if (seen.has(current) || values.length === 5) {
+      truncated = true;
+      break;
+    }
+    seen.add(current);
+    const err = toError(current);
+    if (!err) break;
+    const primary = values.length === 0;
+    values.unshift({
+      type: err.name || "Error",
+      value: err.message,
+      mechanism: { type: primary ? handled ? "generic" : "onerror" : "cause", handled: primary ? handled : true },
+      stacktrace: { frames: err.stack ? parseStack(err.stack) : [] }
+    });
+    try {
+      current = typeof current === "object" ? current.cause : void 0;
+    } catch {
+      truncated = true;
+      break;
+    }
+  }
+  return { values, truncated };
 }
 
 // src/_shared/envelope.ts
 function buildEnvelope(event) {
   const eventJson = JSON.stringify(event);
   const header = JSON.stringify({ sent_at: (/* @__PURE__ */ new Date()).toISOString() });
-  const itemHeader = JSON.stringify({ type: "event", length: eventJson.length });
+  const itemHeader = JSON.stringify({ type: "event", length: new TextEncoder().encode(eventJson).byteLength });
   return `${header}
 ${itemHeader}
 ${eventJson}
@@ -167,7 +170,7 @@ function sanitizeValue(value, maxBytes, depth = 0) {
   if (typeof value === "string") return truncateString(value, maxBytes);
   if (typeof value === "number" || typeof value === "boolean" || value == null) return value;
   if (Array.isArray(value)) {
-    if (depth >= MAX_OBJECT_DEPTH) return value.slice(0, MAX_ARRAY_ITEMS).map((item) => sanitizeValue(item, maxBytes, depth + 1));
+    if (depth >= MAX_OBJECT_DEPTH) return [];
     return value.slice(0, MAX_ARRAY_ITEMS).map((item) => sanitizeValue(item, maxBytes, depth + 1));
   }
   if (typeof value === "object") {
@@ -212,7 +215,7 @@ function trimBreadcrumbs(event, dropped) {
   breadcrumbs.values = breadcrumbs.values.map((crumb) => {
     const next = cloneEvent(crumb);
     if (typeof next.message === "string") next.message = truncateString(next.message, 256);
-    if (next.data && typeof next.data === "object") next.data = sanitizeValue(next.data, 256);
+    if (next.data && typeof next.data === "object") next.data = sanitizeValue(next.data, MAX_URL_BYTES);
     if (typeof next.category === "string") next.category = truncateString(next.category, 128);
     if (typeof next.type === "string") next.type = truncateString(next.type, 64);
     if (typeof next.level === "string") next.level = truncateString(next.level, 32);
@@ -229,6 +232,10 @@ function sanitizeTopLevel(event, dropped) {
   if (typeof event.release === "string") event.release = truncateString(event.release, 128);
   if (typeof event.environment === "string") event.environment = truncateString(event.environment, 64);
   const exceptionValues = event.exception?.values ?? [];
+  if (exceptionValues.length > 5) {
+    exceptionValues.splice(1, exceptionValues.length - 5);
+    dropped.add("cause_chain");
+  }
   for (const exc of exceptionValues) {
     if (typeof exc.type === "string") exc.type = truncateString(exc.type, 128);
     if (typeof exc.value === "string") exc.value = truncateString(exc.value, MAX_STRING_BYTES);
@@ -247,8 +254,8 @@ function sanitizeTopLevel(event, dropped) {
     dropped.add("extra");
   }
   if (event.user) event.user = sanitizeValue(event.user, 256);
-  if (event.request) event.request = sanitizeValue(event.request, 256);
-  if (event.contexts) event.contexts = sanitizeValue(event.contexts, 256);
+  if (event.request) event.request = sanitizeValue(event.request, MAX_URL_BYTES);
+  if (event.contexts) event.contexts = sanitizeValue(event.contexts, MAX_URL_BYTES);
 }
 function attachTrimMetadata(event, dropped, originalSize, finalSize) {
   if (dropped.size === 0 && originalSize === finalSize) return;
@@ -281,6 +288,14 @@ function shrinkForBudget(event, dropped) {
       delete frame.post_context;
     }
   }
+  if (exceptionValues.length > 2) {
+    exceptionValues.splice(1, exceptionValues.length - 2);
+    dropped.add("cause_chain");
+  }
+  for (const exc of exceptionValues.slice(0, -1)) {
+    delete exc.stacktrace;
+    dropped.add("cause_frames");
+  }
   delete event.extra;
   delete event.user;
   delete event.request;
@@ -303,7 +318,7 @@ function prepareBrowserEventForTransport(event) {
     return { event: null, eventSize: byteSize(eventJson), envelopeSize: 0, dropped: [...dropped], originalSize };
   }
   const header = JSON.stringify({ sent_at: (/* @__PURE__ */ new Date()).toISOString() });
-  const itemHeader = JSON.stringify({ type: "event", length: eventJson.length });
+  const itemHeader = JSON.stringify({ type: "event", length: byteSize(eventJson) });
   const envelopeSize = byteSize(`${header}
 ${itemHeader}
 ${eventJson}
@@ -410,16 +425,6 @@ async function enrichTopFrameWithContext(frames, pageUrl) {
   const sourceContext = buildSourceContext(sourceText, frame);
   if (!sourceContext) return frames;
   return frames.map((entry, index) => index === targetIndex ? { ...entry, ...sourceContext } : entry);
-}
-
-// src/_shared/toError.ts
-function toError(value) {
-  if (value instanceof Error) return value;
-  if (value === null || value === void 0) return null;
-  const msg = typeof value === "string" ? value : typeof value === "object" ? String(value.message || JSON.stringify(value)) : String(value);
-  const err = new Error(msg);
-  err.name = typeof value === "object" && value.name ? String(value.name) : "UnknownError";
-  return err;
 }
 
 // src/_shared/rateLimiter.ts
@@ -547,9 +552,6 @@ var _cleanupFns = [];
 function now() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
-function normalizeBreadcrumbUrl(url) {
-  return url.replace(/^https?:\/\/[^/]+/, "").replace(/\?.*$/, "") || "/";
-}
 function formatConsoleArg(value) {
   if (typeof value === "string") return value;
   if (value instanceof Error) return `${value.name}: ${value.message}`;
@@ -604,8 +606,8 @@ function installNavigationInterceptors(buf) {
         type: "navigation",
         category: "navigation",
         data: {
-          from: scrubUrl(currentUrl.replace(window.location.origin, "") || "/"),
-          to: scrubUrl(to.startsWith("http") ? to.replace(window.location.origin, "") : to)
+          from: currentUrl,
+          to
         }
       });
       currentUrl = window.location.href;
@@ -649,7 +651,6 @@ function installFetchInterceptor(buf) {
         url = input.url;
         method = (input.method ?? method).toUpperCase();
       }
-      url = normalizeBreadcrumbUrl(url);
     } catch {
       url = "(unknown)";
     }
@@ -694,7 +695,7 @@ function installXhrInterceptor(buf) {
     try {
       meta.set(this, {
         method: String(method).toUpperCase(),
-        url: normalizeBreadcrumbUrl(String(url))
+        url: String(url)
       });
     } catch {
     }
@@ -817,7 +818,7 @@ var CentryClient = class {
       ...config,
       environment: config.environment ?? import_meta.env?.MODE ?? "production"
     };
-    this.url = envelopeUrl(config.project);
+    this.url = envelopeUrl(config.project, config.host);
     this.rateLimiter = new RateLimiter(config.maxEventsPerMinute ?? 10, 6e4);
     if (typeof window !== "undefined" && config.enabled !== false) {
       installBreadcrumbs();
@@ -874,6 +875,8 @@ var CentryClient = class {
       const dedupWindow = this.config.dedupWindowMs ?? 1e4;
       setTimeout(() => this.recentErrors.delete(dedupKey), dedupWindow);
       if (!this.rateLimiter.allow()) return;
+      const chain = buildExceptionValues(error, handled);
+      if (chain.values.length) chain.values[chain.values.length - 1].stacktrace.frames = enrichedFrames;
       const { browser, os } = parseUa();
       const event = {
         event_id: crypto.randomUUID().replace(/-/g, ""),
@@ -882,21 +885,15 @@ var CentryClient = class {
         environment: this.config.environment,
         release: this.config.release,
         breadcrumbs: { values: getBreadcrumbBuffer()?.snapshot() ?? [] },
-        exception: {
-          values: [{
-            type: err.name || "Error",
-            value: err.message,
-            mechanism: { type: handled ? "generic" : "onerror", handled },
-            stacktrace: { frames: enrichedFrames }
-          }]
-        },
+        exception: { values: chain.values },
+        ...chain.truncated ? { debug_meta: { centry: { cause_chain_truncated: true } } } : {},
         contexts: {
           browser,
           os,
           page: {
-            url: scrubUrl(location.href),
-            "http.query": scrubUrl(location.search),
-            referer: scrubUrl(document.referrer)
+            url: location.href,
+            "http.query": location.search,
+            referer: document.referrer
           },
           runtime: { name: "javascript" }
         }
@@ -928,9 +925,9 @@ var CentryClient = class {
           browser,
           os,
           page: {
-            url: scrubUrl(location.href),
-            "http.query": scrubUrl(location.search),
-            referer: scrubUrl(document.referrer)
+            url: location.href,
+            "http.query": location.search,
+            referer: document.referrer
           },
           runtime: { name: "javascript" }
         }
@@ -941,7 +938,9 @@ var CentryClient = class {
   }
   send(event) {
     try {
-      const prepared = prepareBrowserEventForTransport(event);
+      const filtered = this.config.beforeSend ? this.config.beforeSend(event) : event;
+      if (!filtered || typeof filtered !== "object" || Array.isArray(filtered) || typeof filtered.then === "function") return;
+      const prepared = prepareBrowserEventForTransport(filtered);
       if (!prepared.event) {
         this.reportSendError(new Error("Event exceeded browser transport budget"), prepared.originalSize, "payload_too_large");
         return;

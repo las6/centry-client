@@ -32,6 +32,32 @@ describe('NodeClient', () => {
     vi.useRealTimers()
   })
 
+  it('captures causes and runs the hook before sizing on a self-hosted endpoint', async () => {
+    const hook = vi.fn((event) => ({ ...event, tags: { operation: 'save' } }))
+    const configured = new NodeClient({ project: 'test-project', host: 'https://self.test/', beforeSend: hook })
+    configured.captureException(new Error('outer', { cause: new Error('root') }))
+    await configured.flush()
+    const calls = fetchCalls()
+    expect(calls[0].url).toBe('https://self.test/api/test-project/envelope/')
+    const event = JSON.parse(calls[0].body.split('\n')[2])
+    expect(event.exception.values.map((value: { value: string }) => value.value)).toEqual(['root', 'outer'])
+    expect(event.tags.operation).toBe('save')
+    expect(hook).toHaveBeenCalledOnce()
+  })
+
+  it('drops hook-rejected events and contains hook/transport failures', async () => {
+    const drop = new NodeClient({ project: 'test-project', beforeSend: () => null })
+    drop.captureMessage('drop'); await drop.flush()
+    const fail = new NodeClient({ project: 'test-project', beforeSend: () => { throw Error('hook') } })
+    fail.captureMessage('fail'); await fail.flush()
+    expect(fetchCalls()).toHaveLength(0)
+    const report = vi.fn()
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('', { status: 413 }))
+    const offline = new NodeClient({ project: 'test-project', onSendError: report })
+    offline.captureMessage('offline'); await offline.flush()
+    expect(report).toHaveBeenCalledWith(expect.any(Error), expect.any(Number), 'http_error')
+  })
+
   describe('event capture', () => {
     it('sends event to the correct envelope URL', async () => {
       client.captureException(new Error('node error'))
@@ -176,7 +202,7 @@ describe('NodeClient', () => {
       const event = parsedEvent(fetchCalls()[0].body)
       const reqCtx = event.request as Record<string, unknown>
       expect(reqCtx.method).toBe('GET')
-      expect(reqCtx.url).toBe('/api/notes?token=%5Bfiltered%5D')
+      expect(reqCtx.url).toBe('/api/notes?token=secret')
       const headers = reqCtx.headers as Record<string, string>
       expect(headers['user-agent']).toBe('node-fetch/1.0')
       expect(headers['x-forwarded-for']).toBe('1.2.3.4')
