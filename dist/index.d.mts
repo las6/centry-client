@@ -111,4 +111,5 @@ declare function getClient(): CentryClient | null;
  */
 declare function installGlobalHandlers(client: CentryClient): () => void;
 
-export { CentryClient, type CentryConfig, type CentryEvent, CentryProvider, type SendErrorReason, captureException, captureMessage, getClient, init, installGlobalHandlers };
+export { CentryClient, CentryProvider, captureException, captureMessage, getClient, init, installGlobalHandlers };
+export type { CentryConfig, CentryEvent, SendErrorReason };

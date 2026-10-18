@@ -117,4 +117,5 @@ declare function getNodeClient(): NodeClient | null;
  */
 declare function withCentry<TArgs extends unknown[], TReturn>(config: CentryConfig, handler: (...args: TArgs) => TReturn | Promise<TReturn>): (...args: TArgs) => Promise<Awaited<TReturn>>;
 
-export { type CentryConfig, type CentryEvent, NodeClient, captureException, captureMessage, getNodeClient, initNode, installNodeGlobalHandlers, withCentry };
+export { NodeClient, captureException, captureMessage, getNodeClient, initNode, installNodeGlobalHandlers, withCentry };
+export type { CentryConfig, CentryEvent };

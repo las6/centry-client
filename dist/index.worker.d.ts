@@ -111,4 +111,5 @@ type WorkerHandler = ExportedHandler<Record<string, unknown>>;
  */
 declare function withCentry(config: CentryConfig, handler: WorkerHandler): WorkerHandler;
 
-export { type CentryConfig, type CentryEvent, WorkerClient, captureWorkerException, captureWorkerMessage, getWorkerClient, initWorker, withCentry };
+export { WorkerClient, captureWorkerException, captureWorkerMessage, getWorkerClient, initWorker, withCentry };
+export type { CentryConfig, CentryEvent };

@@ -237,3 +237,7 @@ Request capture still uses a header allowlist and does not automatically collect
 Authorization/Cookie headers or request bodies. Server-side filtering does not
 prevent data from reaching the ingest endpoint; use `beforeSend` when that is
 required. Application grouping and short-window dedup semantics are unchanged.
+
+## Development
+
+Build/test tooling requires Node.js **22.18 or newer** (tsup 9). Run `pnpm install`, `pnpm test`, `pnpm lint` and `pnpm build` in a standalone checkout; the parent Centry workspace also runs these checks against its pinned SDK submodule. This tooling requirement does not change the SDK runtime API or publish a package.
