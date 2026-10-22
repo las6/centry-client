@@ -316,6 +316,47 @@ var RateLimiter = class {
   }
 };
 
+// src/utils.ts
+var sensitiveKeys = [
+  "token",
+  "api_key",
+  "apikey",
+  "auth",
+  "password",
+  "passwd",
+  "secret",
+  "session",
+  "sid",
+  "authorization",
+  "credential",
+  "sig",
+  "signature",
+  "key",
+  "code",
+  "pk",
+  "sk",
+  "jwt",
+  "access_token",
+  "refresh_token",
+  "id_token"
+];
+var FILTERED = "[filtered]";
+function scrubUrl(urlStr) {
+  if (!urlStr || typeof urlStr !== "string") return urlStr;
+  try {
+    let scrubbed = urlStr;
+    scrubbed = scrubbed.replace(/:\/\/([^:@\s]+):([^@\s]+)@/g, `://${FILTERED}:${FILTERED}@`);
+    scrubbed = scrubbed.replace(/:\/\/([^:@\s]+)@/g, `://${FILTERED}@`);
+    for (const key of sensitiveKeys) {
+      const regex = new RegExp(`([?&,#]${key}=)[^&#]*`, "gi");
+      scrubbed = scrubbed.replace(regex, `$1${FILTERED}`);
+    }
+    return scrubbed.replace(/%5Bfiltered%5D/gi, FILTERED);
+  } catch {
+    return urlStr;
+  }
+}
+
 // src/_shared/requestContext.ts
 var SAFE_HEADERS = [
   "accept",
@@ -335,20 +376,24 @@ function buildRequestContext(req) {
     const headers = {};
     for (const key of SAFE_HEADERS) {
       let val = request.headers.get(key);
-      if (val) headers[key] = val;
+      if (val) {
+        headers[key] = key === "referer" ? scrubUrl(val) : val;
+      }
     }
-    return { method: request.method, url: request.url, headers };
+    return { method: request.method, url: scrubUrl(request.url), headers };
   }
   const r = req;
   if (r.headers && typeof r.headers === "object") {
     const headers = {};
     for (const key of SAFE_HEADERS) {
       let val = r.headers[key];
-      if (typeof val === "string") headers[key] = val;
+      if (typeof val === "string") {
+        headers[key] = key === "referer" ? scrubUrl(val) : val;
+      }
     }
     return {
       method: r.method,
-      url: r.url,
+      url: r.url ? scrubUrl(r.url) : r.url,
       headers
     };
   }

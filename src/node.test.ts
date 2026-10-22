@@ -163,15 +163,19 @@ describe('NodeClient', () => {
   })
 
   describe('request context', () => {
-    it('attaches Web Request context when passed explicitly', async () => {
-      const req = new Request('https://api.example.com/users', {
+    it('attaches Web Request context when passed explicitly and scrubs sensitive url & referer', async () => {
+      const req = {
+        headers: {
+          get(name: string) {
+            if (name === 'user-agent') return 'TestAgent/1.0'
+            if (name === 'content-type') return 'application/json'
+            if (name === 'referer') return 'https://example.com/login?password=myPassword'
+            return null
+          },
+        },
         method: 'POST',
-        headers: new Headers({
-          'user-agent': 'TestAgent/1.0',
-          'content-type': 'application/json',
-          'authorization': 'Bearer secret',
-        }),
-      })
+        url: 'https://api.example.com/users?api_key=secretKey',
+      }
 
       client.captureException(new Error('api error'), req)
       await vi.runAllTimersAsync()
@@ -179,19 +183,21 @@ describe('NodeClient', () => {
       const event = parsedEvent(fetchCalls()[0].body)
       const reqCtx = event.request as Record<string, unknown>
       expect(reqCtx.method).toBe('POST')
-      expect(reqCtx.url).toBe('https://api.example.com/users')
+      expect(reqCtx.url).toBe('https://api.example.com/users?api_key=[filtered]')
       const headers = reqCtx.headers as Record<string, string>
       expect(headers['user-agent']).toBe('TestAgent/1.0')
+      expect(headers['referer']).toBe('https://example.com/login?password=[filtered]')
       expect(headers['authorization']).toBeUndefined()
     })
 
-    it('attaches IncomingMessage-style context when passed explicitly', async () => {
+    it('attaches IncomingMessage-style context when passed explicitly and scrubs sensitive url', async () => {
       const req = {
         method: 'GET',
         url: '/api/notes?token=secret',
         headers: {
           'user-agent': 'node-fetch/1.0',
           'x-forwarded-for': '1.2.3.4',
+          'referer': 'https://example.com/auth#access_token=secret_jwt',
           'authorization': 'Bearer token',
         },
       }
@@ -202,10 +208,11 @@ describe('NodeClient', () => {
       const event = parsedEvent(fetchCalls()[0].body)
       const reqCtx = event.request as Record<string, unknown>
       expect(reqCtx.method).toBe('GET')
-      expect(reqCtx.url).toBe('/api/notes?token=secret')
+      expect(reqCtx.url).toBe('/api/notes?token=[filtered]')
       const headers = reqCtx.headers as Record<string, string>
       expect(headers['user-agent']).toBe('node-fetch/1.0')
       expect(headers['x-forwarded-for']).toBe('1.2.3.4')
+      expect(headers['referer']).toBe('https://example.com/auth#access_token=[filtered]')
       expect(headers['authorization']).toBeUndefined()
     })
 

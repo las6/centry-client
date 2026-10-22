@@ -170,16 +170,16 @@ describe('WorkerClient', () => {
       expect(headers['cookie']).toBeUndefined()
     })
 
-    it('preserves request URLs for server filtering', async () => {
+    it('scrubs sensitive query parameters from request URLs', async () => {
       const req = new Request('https://api.example.com/v1/user?token=secret&api_key=123')
       client.captureException(new Error('test'), req)
       await vi.runAllTimersAsync()
 
       const event = JSON.parse(fetchCalls()[0].body.split('\n')[2])
-      expect(event.request.url).toBe('https://api.example.com/v1/user?token=secret&api_key=123')
+      expect(event.request.url).toBe('https://api.example.com/v1/user?token=[filtered]&api_key=[filtered]')
     })
 
-    it('preserves referer for server filtering', async () => {
+    it('scrubs sensitive referer header in request context', async () => {
       const req = {
         method: 'GET',
         url: '/v1/user',
@@ -192,7 +192,7 @@ describe('WorkerClient', () => {
 
       const event = JSON.parse(fetchCalls()[0].body.split('\n')[2])
       const headers = (event.request as Record<string, unknown>).headers as Record<string, string>
-      expect(headers['referer']).toBe('https://dashboard.example.com/reset?token=secret&tab=security')
+      expect(headers['referer']).toBe('https://dashboard.example.com/reset?token=[filtered]&tab=security')
     })
   })
 
