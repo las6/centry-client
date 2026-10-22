@@ -3,6 +3,7 @@
 // Next.js App Router) and IncomingMessage-style objects (Vercel old-style,
 // Next.js Pages Router, Express).
 
+import { scrubUrl } from '../utils'
 
 const SAFE_HEADERS = [
   'accept',
@@ -26,9 +27,11 @@ export function buildRequestContext(req: unknown): Record<string, unknown> | nul
     const headers: Record<string, string> = {}
     for (const key of SAFE_HEADERS) {
       let val = request.headers.get(key)
-      if (val) headers[key] = val
+      if (val) {
+        headers[key] = key === 'referer' ? scrubUrl(val) : val
+      }
     }
-    return { method: request.method, url: request.url, headers }
+    return { method: request.method, url: scrubUrl(request.url), headers }
   }
 
   // IncomingMessage-style (Vercel Node.js, Next.js Pages Router, Express)
@@ -42,12 +45,14 @@ export function buildRequestContext(req: unknown): Record<string, unknown> | nul
     const headers: Record<string, string> = {}
     for (const key of SAFE_HEADERS) {
       let val = r.headers[key]
-      if (typeof val === 'string') headers[key] = val
+      if (typeof val === 'string') {
+        headers[key] = key === 'referer' ? scrubUrl(val) : val
+      }
     }
     // IncomingMessage.url is path-only (e.g. "/api/foo?bar=1"), not a full URL
     return {
       method: r.method,
-      url: r.url,
+      url: r.url ? scrubUrl(r.url) : r.url,
       headers,
     }
   }

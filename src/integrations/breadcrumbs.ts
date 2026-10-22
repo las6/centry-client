@@ -3,6 +3,7 @@
 // ring-buffer of breadcrumbs. The buffer is snapshotted into each captured
 // event so the trail of activity leading up to the error is preserved.
 
+import { scrubUrl } from '../utils'
 
 export interface Breadcrumb {
   timestamp: string
@@ -113,8 +114,8 @@ function installNavigationInterceptors(buf: BreadcrumbBuffer): () => void {
         type: 'navigation',
         category: 'navigation',
         data: {
-          from: currentUrl,
-          to: to,
+          from: scrubUrl(currentUrl),
+          to: scrubUrl(to),
         },
       })
       currentUrl = window.location.href
@@ -181,7 +182,7 @@ function installFetchInterceptor(buf: BreadcrumbBuffer): () => void {
           timestamp: startedAt,
           type: 'http',
           category: 'fetch',
-          data: { url, method, status_code: response.status },
+          data: { url: scrubUrl(url), method, status_code: response.status },
         })
       } catch { /* never throw */ }
       return response
@@ -192,7 +193,7 @@ function installFetchInterceptor(buf: BreadcrumbBuffer): () => void {
           type: 'http',
           category: 'fetch',
           level: 'error',
-          data: { url, method, status_code: 0 },
+          data: { url: scrubUrl(url), method, status_code: 0 },
         })
       } catch { /* never throw */ }
       throw err
@@ -242,7 +243,7 @@ function installXhrInterceptor(buf: BreadcrumbBuffer): () => void {
             type: 'http',
             category: 'xhr',
             ...(status === 0 ? { level: 'error' } : {}),
-            data: { url: info.url, method: info.method, status_code: status },
+            data: { url: scrubUrl(info.url), method: info.method, status_code: status },
           })
         } catch { /* never throw */ }
       })

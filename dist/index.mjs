@@ -496,6 +496,47 @@ function installGlobalHandlers(client) {
   };
 }
 
+// src/utils.ts
+var sensitiveKeys = [
+  "token",
+  "api_key",
+  "apikey",
+  "auth",
+  "password",
+  "passwd",
+  "secret",
+  "session",
+  "sid",
+  "authorization",
+  "credential",
+  "sig",
+  "signature",
+  "key",
+  "code",
+  "pk",
+  "sk",
+  "jwt",
+  "access_token",
+  "refresh_token",
+  "id_token"
+];
+var FILTERED = "[filtered]";
+function scrubUrl(urlStr) {
+  if (!urlStr || typeof urlStr !== "string") return urlStr;
+  try {
+    let scrubbed = urlStr;
+    scrubbed = scrubbed.replace(/:\/\/([^:@\s]+):([^@\s]+)@/g, `://${FILTERED}:${FILTERED}@`);
+    scrubbed = scrubbed.replace(/:\/\/([^:@\s]+)@/g, `://${FILTERED}@`);
+    for (const key of sensitiveKeys) {
+      const regex = new RegExp(`([?&,#]${key}=)[^&#]*`, "gi");
+      scrubbed = scrubbed.replace(regex, `$1${FILTERED}`);
+    }
+    return scrubbed.replace(/%5Bfiltered%5D/gi, FILTERED);
+  } catch {
+    return urlStr;
+  }
+}
+
 // src/integrations/breadcrumbs.ts
 var MAX_BREADCRUMBS2 = 100;
 var BreadcrumbBuffer = class {
@@ -574,8 +615,8 @@ function installNavigationInterceptors(buf) {
         type: "navigation",
         category: "navigation",
         data: {
-          from: currentUrl,
-          to
+          from: scrubUrl(currentUrl),
+          to: scrubUrl(to)
         }
       });
       currentUrl = window.location.href;
@@ -629,7 +670,7 @@ function installFetchInterceptor(buf) {
           timestamp: startedAt,
           type: "http",
           category: "fetch",
-          data: { url, method, status_code: response.status }
+          data: { url: scrubUrl(url), method, status_code: response.status }
         });
       } catch {
       }
@@ -641,7 +682,7 @@ function installFetchInterceptor(buf) {
           type: "http",
           category: "fetch",
           level: "error",
-          data: { url, method, status_code: 0 }
+          data: { url: scrubUrl(url), method, status_code: 0 }
         });
       } catch {
       }
@@ -680,7 +721,7 @@ function installXhrInterceptor(buf) {
             type: "http",
             category: "xhr",
             ...status === 0 ? { level: "error" } : {},
-            data: { url: info.url, method: info.method, status_code: status }
+            data: { url: scrubUrl(info.url), method: info.method, status_code: status }
           });
         } catch {
         }

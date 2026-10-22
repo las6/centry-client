@@ -43,9 +43,8 @@ describe('Breadcrumbs Integration', () => {
       const navCrumb = crumbs.find(c => c.type === 'navigation')
 
       expect(navCrumb).toBeDefined()
-      // The ingest server owns automatic credential filtering.
-      expect(navCrumb?.data?.from).toBe('https://example.com/start?token=secret1')
-      expect(navCrumb?.data?.to).toBe('/target?api_key=secret2')
+      expect(navCrumb?.data?.from).toBe('https://example.com/start?token=[filtered]')
+      expect(navCrumb?.data?.to).toBe('/target?api_key=[filtered]')
     })
   })
 
@@ -99,7 +98,7 @@ describe('Breadcrumbs Integration', () => {
       ;(xhr as unknown as FakeXhr).emit('loadend')
 
       const crumb = buf.snapshot().find(c => c.category === 'xhr')
-      expect(crumb?.data).toEqual({ url: 'https://example.com/api/items?token=secret', method: 'POST', status_code: 401 })
+      expect(crumb?.data).toEqual({ url: 'https://example.com/api/items?token=[filtered]', method: 'POST', status_code: 401 })
     })
 
     it('marks network failures (status 0) as error level', () => {
