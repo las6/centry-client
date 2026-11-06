@@ -276,6 +276,76 @@ describe('module-level singleton', () => {
     expect(event.exception.values[0].mechanism).toEqual({ type: 'onerror', handled: false })
   })
 
+  describe('ErrorEvent location fallback', () => {
+    const stackless = (message: string) => {
+      const error = new TypeError(message)
+      error.stack = ''
+      return error
+    }
+    const primaryFrames = async () => {
+      const event = await parseEvent(0)
+      return event.exception.values[event.exception.values.length - 1].stacktrace.frames
+    }
+
+    it('adds a marked frame for a stackless error with source fields', async () => {
+      init({ project: 'browser-app' })
+
+      window.dispatchEvent(new ErrorEvent('error', {
+        error: stackless('located'), filename: 'https://cdn.example.net/app.js', lineno: 12, colno: 34,
+      }))
+      await drain()
+
+      expect(await primaryFrames()).toEqual([{
+        filename: 'https://cdn.example.net/app.js',
+        function: '<anonymous>',
+        lineno: 12,
+        colno: 34,
+        in_app: true,
+        location_source: 'error_event',
+      }])
+    })
+
+    it.each([
+      ['no source fields', {}],
+      ['an empty filename', { filename: '', lineno: 12, colno: 34 }],
+      ['line 0', { filename: 'https://cdn.example.net/app.js', lineno: 0, colno: 0 }],
+    ])('leaves the location unknown with %s', async (_name, fields) => {
+      init({ project: 'browser-app' })
+
+      window.dispatchEvent(new ErrorEvent('error', { error: stackless('unknown'), ...fields }))
+      await drain()
+
+      expect(await primaryFrames()).toEqual([])
+    })
+
+    it('keeps a parsed stack unchanged', async () => {
+      init({ project: 'browser-app' })
+      const error = new Error('stacked')
+      error.stack = 'Error: stacked\n    at render (https://cdn.example.net/real.js:1:2)'
+
+      window.dispatchEvent(new ErrorEvent('error', { error, filename: 'https://cdn.example.net/other.js', lineno: 9, colno: 9 }))
+      await drain()
+
+      const frames = await primaryFrames()
+      expect(frames).toHaveLength(1)
+      expect(frames[0].filename).toBe('https://cdn.example.net/real.js')
+      expect(frames[0].location_source).toBeUndefined()
+    })
+
+    it('captures the same error once across both handlers', async () => {
+      init({ project: 'browser-app' })
+      const error = stackless('both handlers')
+
+      window.dispatchEvent(new ErrorEvent('error', { error, filename: 'https://cdn.example.net/app.js', lineno: 1, colno: 1 }))
+      const rejection = new Event('unhandledrejection') as Event & { reason: unknown }
+      rejection.reason = error
+      window.dispatchEvent(rejection)
+      await drain()
+
+      expect(vi.mocked(navigator.sendBeacon).mock.calls).toHaveLength(1)
+    })
+  })
+
   it('supports opting out of automatic browser global handlers', async () => {
     init({ project: 'browser-app', globalHandlers: false })
 

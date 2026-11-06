@@ -57,6 +57,25 @@ interface FrameRaw {
   lineno: number | null
   colno: number | null
   in_app: boolean
+  location_source?: 'error_event'
+}
+
+/** Source fields from a browser ErrorEvent. Browsers report unknown values as '' or 0. */
+export interface ErrorEventLocation {
+  filename: string
+  lineno: number
+  colno: number
+}
+
+function errorEventFrames(eventLocation?: ErrorEventLocation): Omit<FrameRaw, 'in_app'>[] {
+  if (!eventLocation?.filename || !(eventLocation.lineno > 0)) return []
+  return [{
+    filename: eventLocation.filename,
+    function: '<anonymous>',
+    lineno: eventLocation.lineno,
+    colno: eventLocation.colno > 0 ? eventLocation.colno : null,
+    location_source: 'error_event',
+  }]
 }
 
 import { toError } from './_shared/toError'
@@ -133,8 +152,8 @@ export class CentryClient {
   }
 
   /** Internal: capture an unhandled exception (handled = false). Used by globalHandlers. */
-  captureUnhandled(error: unknown): void {
-    void this._capture(error, false)
+  captureUnhandled(error: unknown, eventLocation?: ErrorEventLocation): void {
+    void this._capture(error, false, eventLocation)
   }
 
   /**
@@ -148,7 +167,7 @@ export class CentryClient {
     void this._captureMessage(message, level)
   }
 
-  private async _capture(error: unknown, handled: boolean): Promise<void> {
+  private async _capture(error: unknown, handled: boolean, eventLocation?: ErrorEventLocation): Promise<void> {
     try {
       if (this.config.enabled === false) return
       if (typeof window === 'undefined') return
@@ -159,7 +178,8 @@ export class CentryClient {
       // Filter cross-origin noise
       if (err.message === 'Script error.' || err.message === 'Script error') return
 
-      const frames = err.stack ? parseStack(err.stack) : []
+      const parsedFrames = err.stack ? parseStack(err.stack) : []
+      const frames = parsedFrames.length > 0 ? parsedFrames : errorEventFrames(eventLocation)
       const allowUrls = this.config.allowUrls
       const rawFrames: FrameRaw[] = frames.map((f) => ({
         ...f,

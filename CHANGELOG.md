@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Use the browser `ErrorEvent` filename, line and column as a marked fallback
+  frame when an uncaught error has no usable stack. Upgrade self-hosted servers
+  first: older servers would group on this frame and split existing issues.
+
 ## 1.4.0
 
 - Preserve bounded `Error.cause` chains in browser, Node and Worker events.

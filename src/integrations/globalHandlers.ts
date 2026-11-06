@@ -44,7 +44,11 @@ function onError(event: ErrorEvent): void {
   const state = getState()
   if (error instanceof Error && !state.seen.has(error)) {
     state.seen.add(error)
-    getActiveClient()?.captureUnhandled(error)
+    getActiveClient()?.captureUnhandled(error, {
+      filename: event.filename,
+      lineno: event.lineno,
+      colno: event.colno,
+    })
   }
 }
 
