@@ -444,7 +444,11 @@ function onError(event) {
   const state = getState();
   if (error instanceof Error && !state.seen.has(error)) {
     state.seen.add(error);
-    getActiveClient()?.captureUnhandled(error);
+    getActiveClient()?.captureUnhandled(error, {
+      filename: event.filename,
+      lineno: event.lineno,
+      colno: event.colno
+    });
   }
 }
 function onUnhandledRejection(event) {
@@ -759,6 +763,16 @@ function parseUa() {
     os: { name: osName, version: osVersion }
   };
 }
+function errorEventFrames(eventLocation) {
+  if (!eventLocation?.filename || !(eventLocation.lineno > 0)) return [];
+  return [{
+    filename: eventLocation.filename,
+    function: "<anonymous>",
+    lineno: eventLocation.lineno,
+    colno: eventLocation.colno > 0 ? eventLocation.colno : null,
+    location_source: "error_event"
+  }];
+}
 function normalizeForDedup(url) {
   const q = url.indexOf("?");
   if (q === -1) return url;
@@ -807,8 +821,8 @@ var CentryClient = class {
     void this._capture(error, true);
   }
   /** Internal: capture an unhandled exception (handled = false). Used by globalHandlers. */
-  captureUnhandled(error) {
-    void this._capture(error, false);
+  captureUnhandled(error, eventLocation) {
+    void this._capture(error, false, eventLocation);
   }
   /**
    * Capture a plain message (non-exception). Level defaults to 'info'.
@@ -820,14 +834,15 @@ var CentryClient = class {
   captureMessage(message, level = "info") {
     void this._captureMessage(message, level);
   }
-  async _capture(error, handled) {
+  async _capture(error, handled, eventLocation) {
     try {
       if (this.config.enabled === false) return;
       if (typeof window === "undefined") return;
       const err = toError(error);
       if (!err) return;
       if (err.message === "Script error." || err.message === "Script error") return;
-      const frames = err.stack ? parseStack(err.stack) : [];
+      const parsedFrames = err.stack ? parseStack(err.stack) : [];
+      const frames = parsedFrames.length > 0 ? parsedFrames : errorEventFrames(eventLocation);
       const allowUrls = this.config.allowUrls;
       const rawFrames = frames.map((f) => ({
         ...f,

@@ -43,6 +43,12 @@ interface CentryProviderProps extends CentryConfig {
  */
 declare function CentryProvider({ children, ...config }: CentryProviderProps): React.ReactElement;
 
+/** Source fields from a browser ErrorEvent. Browsers report unknown values as '' or 0. */
+interface ErrorEventLocation {
+    filename: string;
+    lineno: number;
+    colno: number;
+}
 declare class CentryClient {
     private config;
     private url;
@@ -55,7 +61,7 @@ declare class CentryClient {
     /** Capture a manually-caught exception (handled = true). */
     captureException(error: unknown): void;
     /** Internal: capture an unhandled exception (handled = false). Used by globalHandlers. */
-    captureUnhandled(error: unknown): void;
+    captureUnhandled(error: unknown, eventLocation?: ErrorEventLocation): void;
     /**
      * Capture a plain message (non-exception). Level defaults to 'info'.
      *

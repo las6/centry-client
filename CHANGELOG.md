@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.1
 
 - Use the browser `ErrorEvent` filename, line and column as a marked fallback
   frame when an uncaught error has no usable stack. Upgrade self-hosted servers
